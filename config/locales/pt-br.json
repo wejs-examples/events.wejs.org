@@ -289,5 +289,9 @@
 	"form-login-password": "form-login-password",
 	"form-placeholder-login-password": "form-placeholder-login-password",
 	"form-login-submit": "form-login-submit",
-	"Missing credentials": "Missing credentials"
+	"Missing credentials": "Missing credentials",
+	"permission.title": "Permissões (ACL)",
+	"theme.link": "Temas",
+	"permission.link": "Permissões (ACL)",
+	"home": "home"
 }
