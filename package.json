@@ -1,5 +1,5 @@
 {
-  "name": "we-plugin-conference",
+  "name": "we-project-conference",
   "version": "0.3.0",
   "private": true,
   "main": "./app.js",
@@ -14,8 +14,9 @@
     "async": "^0.9.0",
     "lodash": "^3.3.1",
     "we-core": "^0.3.28",
+    "we-plugin-conference": "^0.3.1",
     "we-plugin-file": "^0.3.1",
-    "we-plugin-form": "^0.3.0",
+    "we-plugin-form": "^0.3.1",
     "we-plugin-page": "^0.3.0",
     "we-theme-admin-default": "0.3.2",
     "we-theme-conference": "0.3.0"

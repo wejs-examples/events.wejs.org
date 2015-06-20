@@ -219,5 +219,8 @@
 	"Forgot Password form": "Forgot Password form",
 	"Enter you e-mail address to request a password change.": "Enter you e-mail address to request a password change",
 	"Send email": "Send email",
-	"auth.login.title": "auth.login.title"
+	"auth.login.title": "auth.login.title",
+	"theme.link": "theme.link",
+	"users.link": "users.link",
+	"permission.link": "permission.link"
 }
