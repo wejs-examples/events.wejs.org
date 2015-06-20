@@ -18,7 +18,7 @@
     "we-plugin-file": "^0.3.1",
     "we-plugin-form": "^0.3.1",
     "we-plugin-page": "^0.3.0",
-    "we-theme-admin-default": "0.3.2",
+    "we-theme-admin-default": "0.3.3",
     "we-theme-conference": "0.3.0"
   },
   "devDependencies": {}
