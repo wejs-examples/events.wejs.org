@@ -335,5 +335,17 @@
 	"conference": "conference",
 	"submit": "submit",
 	"save": "save",
-	"Validation isEmail failed": "Validation isEmail failed"
+	"Validation isEmail failed": "Validation isEmail failed",
+	"conference.admin.menu.empty": "conference.admin.menu.empty",
+	"conference_admin_menu": "conference_admin_menu",
+	"conference_admin": "conference_admin",
+	"conference_admin_edit": "conference_admin_edit",
+	"conference.register": "conference.register",
+	"days": "days",
+	"hours": "hours",
+	"minutes": "minutes",
+	"seconds": "seconds",
+	"conference.next.info": "conference.next.info",
+	"conference.find": "conference.find",
+	"conference_admin_layout": "conference_admin_layout"
 }

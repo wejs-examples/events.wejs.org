@@ -222,5 +222,6 @@
 	"auth.login.title": "auth.login.title",
 	"theme.link": "theme.link",
 	"users.link": "users.link",
-	"permission.link": "permission.link"
+	"permission.link": "permission.link",
+	"conference.eventStartDate": "conference.eventStartDate"
 }
