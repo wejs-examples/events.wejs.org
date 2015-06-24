@@ -5,6 +5,7 @@
   "main": "./app.js",
   "scripts": {
     "dev": "PORT=4000 node app.js",
+    "verbose": "PORT=4000 LOG_LV=verbose node app.js",
     "prod": "PORT=4000 NODE_ENV=prod node app.js",
     "deps": "npm install && bower install",
     "start": "grunt && node app.js",
