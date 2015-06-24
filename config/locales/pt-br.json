@@ -370,5 +370,20 @@
 	"form-page-bodyClean": "form-page-bodyClean",
 	"form-placeholder-page-bodyClean": "form-placeholder-page-bodyClean",
 	"form-page-bodyTeaser": "form-page-bodyTeaser",
-	"form-placeholder-page-bodyTeaser": "form-placeholder-page-bodyTeaser"
+	"form-placeholder-page-bodyTeaser": "form-placeholder-page-bodyTeaser",
+	"form-page-active": "form-page-active",
+	"form-placeholder-page-active": "form-placeholder-page-active",
+	"form-page-published": "form-page-published",
+	"form-placeholder-page-published": "form-placeholder-page-published",
+	"form-cfpage-title": "form-cfpage-title",
+	"form-placeholder-cfpage-title": "form-placeholder-cfpage-title",
+	"form-cfpage-about": "form-cfpage-about",
+	"form-placeholder-cfpage-about": "form-placeholder-cfpage-about",
+	"form-cfpage-active": "form-cfpage-active",
+	"form-placeholder-cfpage-active": "form-placeholder-cfpage-active",
+	"form-cfpage-published": "form-cfpage-published",
+	"form-placeholder-cfpage-published": "form-placeholder-cfpage-published",
+	"form-cfpage-body": "form-cfpage-body",
+	"cfpage": "cfpage",
+	"cfpages.title": "cfpages.title"
 }
