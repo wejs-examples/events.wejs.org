@@ -8,7 +8,9 @@
     "prod": "PORT=4000 NODE_ENV=prod node app.js",
     "deps": "npm install && bower install",
     "start": "grunt && node app.js",
-    "build": "grunt build"
+    "build": "grunt build",
+    "test": "NODE_ENV=test LOG_LV=info ./node_modules/.bin/mocha test/bootstrap.js test/**/*.test.js",
+    "prepublish": "npm prune"
   },
   "dependencies": {
     "async": "^0.9.0",
@@ -22,5 +24,10 @@
     "we-theme-conference": "0.3.0",
     "we-theme-site-wejs": "^0.3.12"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "mocha": "^2.2.5",
+    "we-test-tools": "^0.3.4",
+    "sinon": "^1.14.1",
+    "supertest": "^1.0.1"
+  }
 }
