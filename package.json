@@ -16,14 +16,13 @@
   "dependencies": {
     "async": "^0.9.0",
     "lodash": "^3.3.1",
-    "we-core": "^0.3.30",
-    "we-plugin-conference": "^0.3.1",
+    "we-core": "^0.3.34",
+    "we-plugin-conference": "wejs/we-plugin-conference",
     "we-plugin-file": "^0.3.1",
-    "we-plugin-form": "^0.3.1",
-    "we-plugin-page": "^0.3.0",
+    "we-plugin-form": "^0.3.2",
     "we-theme-admin-default": "0.3.3",
-    "we-theme-conference": "0.3.0",
-    "we-theme-site-wejs": "^0.3.12"
+    "we-theme-conference": "wejs/we-theme-conference",
+    "we-theme-site-wejs": "^0.3.14"
   },
   "devDependencies": {
     "mocha": "^2.2.5",

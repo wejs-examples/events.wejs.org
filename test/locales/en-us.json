@@ -1,4 +1,5 @@
 {
+	"Login": "Login",
 	"title cannot be null": "title cannot be null",
 	"form-conference-title": "form-conference-title",
 	"form-placeholder-conference-title": "form-placeholder-conference-title",
@@ -30,5 +31,7 @@
 	"form-placeholder-conference-status": "form-placeholder-conference-status",
 	"Save": "Save",
 	"home": "home",
-	"conference.find": "conference.find"
+	"conference.find": "conference.find",
+	"Profile": "Profile",
+	"Logout": "Logout"
 }
