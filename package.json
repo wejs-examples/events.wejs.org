@@ -20,6 +20,7 @@
     "we-plugin-conference": "wejs/we-plugin-conference",
     "we-plugin-file": "^0.3.1",
     "we-plugin-form": "^0.3.2",
+    "we-plugin-vocabulary": "^0.3.1",
     "we-theme-admin-default": "0.3.3",
     "we-theme-conference": "wejs/we-theme-conference",
     "we-theme-site-wejs": "^0.3.14"
