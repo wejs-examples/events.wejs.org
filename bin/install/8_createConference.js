@@ -9,6 +9,8 @@ module.exports = function(we, done) {
       registrationManagerEmail: 'contato@albertosouza.net',
       location: 'Brasil, Rio de Janeiro',
 
+      tags: ['educação', 'saúde'],
+
       callForPapersStartDate: Date.now(),
       callForPapersEndDate: Date.now(),
       registrationStartDate: Date.now(),
