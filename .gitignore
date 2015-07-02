@@ -46,3 +46,6 @@ files/wejsdoc
 
 .tmp
 config/local.js
+
+# OS X
+.DS_Store
