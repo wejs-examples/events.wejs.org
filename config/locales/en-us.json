@@ -6,5 +6,7 @@
 	"conference_admin_edit": "conference_admin_edit",
 	"conference_admin_menu": "conference_admin_menu",
 	"conference_admin_layouts": "conference_admin_layouts",
-	"conference_findOne.page_manage": "conference_findOne.page_manage"
+	"conference_findOne.page_manage": "conference_findOne.page_manage",
+	"Masculine": "Masculine",
+	"Feminine": "Feminine"
 }
