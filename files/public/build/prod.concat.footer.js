@@ -22132,6 +22132,1208 @@ _fnEscapeRegex:va,_fnFilterData:yb,_fnFeatureHtmlInfo:rb,_fnUpdateInfo:Bb,_fnInf
 _fnSort:lb,_fnSortAria:Jb,_fnSortListener:Ua,_fnSortAttachListener:Oa,_fnSortingClasses:xa,_fnSortData:Ib,_fnSaveState:ya,_fnLoadState:Kb,_fnSettingsFromNode:za,_fnLog:I,_fnMap:E,_fnBindAction:Va,_fnCallbackReg:z,_fnCallbackFire:w,_fnLengthOverflow:Sa,_fnRenderer:Pa,_fnDataSource:B,_fnRowAttributes:Ma,_fnCalculateEnd:function(){}});h.fn.dataTable=m;h.fn.dataTableSettings=m.settings;h.fn.dataTableExt=m.ext;h.fn.DataTable=function(a){return h(this).dataTable(a).api()};h.each(m,function(a,b){h.fn.DataTable[a]=
 b});return h.fn.dataTable};"function"===typeof define&&define.amd?define("datatables",["jquery"],P):"object"===typeof exports?module.exports=P(require("jquery")):jQuery&&!jQuery.fn.dataTable&&P(jQuery)})(window,document);
 
+/**
+ * @file
+ * jQuery Tabledrag plugin. Drag and drop table rows with field manipulation.
+ * Most code is copied verbatim from Drupal core, misc/tabledrag.js.
+ * @license GPL V2 
+ * @author Wouter Admiraal <wadmiraal@connect-i.ch>
+ */
+
+;(function($, undefined) {
+
+// Use the Drupal namespace to facilitate the fork.
+var Drupal = {};
+
+/**
+ * Plugin definition.
+ */
+$.fn.tableDrag = function(settings) {
+  settings = $.extend({
+    draggableClass: 'draggable',
+    cookiePath: '/',
+    group: {
+      fieldClass: 'row-depth',
+      depthLimit: 3
+    },
+    weight: {
+      fieldClass: 'row-weight',
+      hidden: true
+    },
+    parent: {
+      fieldClass: 'row-parent',
+      sourceFieldClass: 'person-id',
+      hidden: true
+    }
+  }, settings || {});
+
+  this.each(function() {
+    var table = new Drupal.tableDrag(this, settings);
+
+    // Indent each row.
+    $('tr.' + settings.draggableClass, this).each(function() {
+      var row = $(this);
+
+      if (settings.group.fieldClass) {
+        var field = $('.' + settings.group.fieldClass, row);
+
+        if (field.length) {
+          for (var i = 1, len = field.val(); i < len; i++) {
+            $('td:first', row).prepend(Drupal.theme('tableDragIndentation'));
+          }
+        }
+      }
+    });
+  });
+};
+
+/**
+ * Constructor for the tableDrag object. Provides table and field manipulation.
+ *
+ * @param table
+ *   DOM object for the table to be made draggable.
+ * @param tableSettings
+ *   Settings for the table.
+ */
+Drupal.tableDrag = function (table, tableSettings) {
+  var self = this;
+
+  // Required object variables.
+  this.table = table;
+  this.$table = $(table); // Cache the jQuery object.
+  this.tableSettings = tableSettings;
+  this.dragObject = null; // Used to hold information about a current drag operation.
+  this.rowObject = null; // Provides operations for row manipulation.
+  this.oldRowElement = null; // Remember the previous element.
+  this.oldY = 0; // Used to determine up or down direction from last mouse move.
+  this.changed = false; // Whether anything in the entire table has changed.
+  this.maxDepth = 0; // Maximum amount of allowed parenting.
+  this.rtl = $(this.table).css('direction') == 'rtl' ? -1 : 1; // Direction of the table.
+
+  // Configure the scroll settings.
+  this.scrollSettings = { amount: 4, interval: 50, trigger: 70 };
+  this.scrollInterval = null;
+  this.scrollY = 0;
+  this.windowHeight = 0;
+
+  // Check this table's settings to see if there are parent relationships in
+  // this table. For efficiency, large sections of code can be skipped if we
+  // don't need to track horizontal movement and indentations.
+  this.indentEnabled = !!tableSettings.parent.fieldClass;
+  this.maxDepth = this.indentEnabled ? tableSettings.group.depthLimit : this.maxDepth;
+
+  if (this.indentEnabled) {
+    this.indentCount = 1; // Total width of indents, set in makeDraggable.
+    // Find the width of indentations to measure mouse movements against.
+    // Because the table doesn't need to start with any indentations, we
+    // manually append 2 indentations in the first draggable row, measure
+    // the offset, then remove.
+    var indent = Drupal.theme('tableDragIndentation');
+    var testRow = $('<tr/>').addClass(this.tableSettings.draggableClass).appendTo(table);
+    var testCell = $('<td/>').appendTo(testRow).prepend(indent).prepend(indent);
+    this.indentAmount = $('.indentation', testCell).get(1).offsetLeft - $('.indentation', testCell).get(0).offsetLeft;
+    testRow.remove();
+  }
+
+  // Make each applicable row draggable.
+  // Match immediate children of the parent element to allow nesting.
+  $('> tr.' + this.tableSettings.draggableClass + ', > tbody > tr.' + this.tableSettings.draggableClass, table).each(function () { self.makeDraggable(this); });
+
+  // Add a link before the table for users to show or hide weight columns.
+  this.$table.before($('<a href="#" class="tabledrag-toggle-weight"></a>')
+    .attr('title', Drupal.t('Re-order rows by numerical weight/parent instead of dragging.'))
+    .click(function () {
+      if ($.cookie('Drupal.tableDrag.showWeight') == 1) {
+        self.hideColumns();
+      }
+      else {
+        self.showColumns();
+      }
+      return false;
+    })
+    .wrap('<div class="tabledrag-toggle-weight-wrapper"></div>')
+    .parent()
+  );
+
+  // Initialize the specified columns (for example, weight or parent columns)
+  // to show or hide according to user preference. This aids accessibility
+  // so that, e.g., screen reader users can choose to enter weight values and
+  // manipulate form elements directly, rather than using drag-and-drop..
+  self.initColumns();
+
+  // Add mouse bindings to the document. The self variable is passed along
+  // as event handlers do not have direct access to the tableDrag object.
+  $(document).bind('mousemove', function (event) { return self.dragRow(event, self); });
+  $(document).bind('mouseup', function (event) { return self.dropRow(event, self); });
+};
+
+/**
+ * Initialize columns containing form elements to be hidden by default,
+ * according to the settings for this tableDrag instance.
+ *
+ * Identify and mark each cell with a CSS class so we can easily toggle
+ * show/hide it. Finally, hide columns if user does not have a
+ * 'Drupal.tableDrag.showWeight' cookie.
+ */
+Drupal.tableDrag.prototype.initColumns = function () {
+  for (var group in { group: 1, weight: 1, parent: 1}) {
+    // Find the first field in this group.
+    if (this.tableSettings[group].fieldClass !== undefined) {
+      var field = $('.' + this.tableSettings[group].fieldClass + ':first', this.table);
+      if (field.length && this.tableSettings[group].hidden) {
+        var hidden = this.tableSettings[group].hidden;
+        var cell = field.closest('td');
+      }
+    }
+
+    // Mark the column containing this field so it can be hidden.
+    if (hidden && cell[0]) {
+      // Add 1 to our indexes. The nth-child selector is 1 based, not 0 based.
+      // Match immediate children of the parent element to allow nesting.
+      var columnIndex = $('> td', cell.parent()).index(cell.get(0)) + 1;
+      $('> thead > tr, > tbody > tr, > tr', this.table).each(function () {
+        // Get the columnIndex and adjust for any colspans in this row.
+        var index = columnIndex;
+        var cells = $(this).children();
+        cells.each(function (n) {
+          if (n < index && this.colSpan && this.colSpan > 1) {
+            index -= this.colSpan - 1;
+          }
+        });
+        if (index > 0) {
+          cell = cells.filter(':nth-child(' + index + ')');
+          if (cell[0].colSpan && cell[0].colSpan > 1) {
+            // If this cell has a colspan, mark it so we can reduce the colspan.
+            cell.addClass('tabledrag-has-colspan');
+          }
+          else {
+            // Mark this cell so we can hide it.
+            cell.addClass('tabledrag-hide');
+          }
+        }
+      });
+    }
+  }
+
+  // Now hide cells and reduce colspans unless cookie indicates previous choice.
+  // Set a cookie if it is not already present.
+  if ($.cookie('Drupal.tableDrag.showWeight') === null) {
+    $.cookie('Drupal.tableDrag.showWeight', 0, {
+      path: this.tableSettings.cookiePath,
+      // The cookie expires in one year.
+      expires: 365
+    });
+    this.hideColumns();
+  }
+  // Check cookie value and show/hide weight columns accordingly.
+  else {
+    if ($.cookie('Drupal.tableDrag.showWeight') == 1) {
+      this.showColumns();
+    }
+    else {
+      this.hideColumns();
+    }
+  }
+};
+
+/**
+ * Hide the columns containing weight/parent form elements.
+ * Undo showColumns().
+ */
+Drupal.tableDrag.prototype.hideColumns = function () {
+  // Hide weight/parent cells and headers.
+  $('.tabledrag-hide', this.table).css('display', 'none');
+  // Show TableDrag handles.
+  $('.tabledrag-handle', this.table).css('display', '');
+  // Reduce the colspan of any effected multi-span columns.
+  $('.tabledrag-has-colspan', this.table).each(function () {
+    this.colSpan = this.colSpan - 1;
+  });
+  // Change link text.
+  $('.tabledrag-toggle-weight').text(Drupal.t('Show row weights/parents'));
+  // Change cookie.
+  $.cookie('Drupal.tableDrag.showWeight', 0, {
+    path: this.tableSettings.cookiePath,
+    // The cookie expires in one year.
+    expires: 365
+  });
+  // Trigger an event to allow other scripts to react to this display change.
+  $(this.table).trigger('columnschange', 'hide');
+};
+
+/**
+ * Show the columns containing weight/parent form elements
+ * Undo hideColumns().
+ */
+Drupal.tableDrag.prototype.showColumns = function () {
+  // Show weight/parent cells and headers.
+  $('.tabledrag-hide', this.table).css('display', '');
+  // Hide TableDrag handles.
+  $('.tabledrag-handle', this.table).css('display', 'none');
+  // Increase the colspan for any columns where it was previously reduced.
+  $('.tabledrag-has-colspan', this.table).each(function () {
+    this.colSpan = this.colSpan + 1;
+  });
+  // Change link text.
+  $('.tabledrag-toggle-weight').text(Drupal.t('Hide row weights/parents'));
+  // Change cookie.
+  $.cookie('Drupal.tableDrag.showWeight', 1, {
+    path: this.tableSettings.cookiePath,
+    // The cookie expires in one year.
+    expires: 365
+  });
+  // Trigger an event to allow other scripts to react to this display change.
+  $(this.table).trigger('columnschange', 'show'); // @todo Cache $(this.table)
+};
+
+/**
+ * Find the target used within a particular row and group.
+ */
+Drupal.tableDrag.prototype.rowSettings = function (group, row) {
+  if (this.tableSettings[group].fieldClass !== undefined) {
+    var field = $('.' + this.tableSettings[group].fieldClass, row);
+    if (field.length) {
+      // Return a copy of the row settings.
+      var rowSettings = this.tableSettings[group];
+      rowSettings.relationship = group == 'group' ? 'group' : (group == 'parent' ? 'parent' : (group == 'weight' ? 'sibling' : 'self'));
+      rowSettings.action = group == 'group' ? 'depth' : (group == 'parent' ? 'match' : (group == 'weight' ? 'order' : 'order'));
+      return rowSettings;
+    }
+  }
+};
+
+/**
+ * Take an item and add event handlers to make it become draggable.
+ */
+Drupal.tableDrag.prototype.makeDraggable = function (item) {
+  var self = this;
+
+  // Create the handle.
+  var handle = $('<a href="#" class="tabledrag-handle"><div class="handle">&nbsp;</div></a>').attr('title', Drupal.t('Drag to re-order'));
+  // Insert the handle after indentations (if any).
+  if ($('td:first .indentation:last', item).length) {
+    $('td:first .indentation:last', item).after(handle);
+    // Update the total width of indentation in this entire table.
+    self.indentCount = Math.max($('.indentation', item).length, self.indentCount);
+  }
+  else {
+    $('td:first', item).prepend(handle);
+  }
+
+  // Add hover action for the handle.
+  handle.hover(function () {
+    self.dragObject == null ? $(this).addClass('tabledrag-handle-hover') : null;
+  }, function () {
+    self.dragObject == null ? $(this).removeClass('tabledrag-handle-hover') : null;
+  });
+
+  // Add the mousedown action for the handle.
+  handle.mousedown(function (event) {
+    // Create a new dragObject recording the event information.
+    self.dragObject = {};
+    self.dragObject.initMouseOffset = self.getMouseOffset(item, event);
+    self.dragObject.initMouseCoords = self.mouseCoords(event);
+    if (self.indentEnabled) {
+      self.dragObject.indentMousePos = self.dragObject.initMouseCoords;
+    }
+
+    // If there's a lingering row object from the keyboard, remove its focus.
+    if (self.rowObject) {
+      $('a.tabledrag-handle', self.rowObject.element).blur();
+    }
+
+    // Create a new rowObject for manipulation of this row.
+    self.rowObject = new self.row(item, 'mouse', self.indentEnabled, self.maxDepth, true, self.tableSettings.draggableClass);
+
+    // Save the position of the table.
+    self.table.topY = $(self.table).offset().top;
+    self.table.bottomY = self.table.topY + self.table.offsetHeight;
+
+    // Add classes to the handle and row.
+    $(this).addClass('tabledrag-handle-hover');
+    $(item).addClass('drag');
+
+    // Set the document to use the move cursor during drag.
+    $('body').addClass('drag');
+    if (self.oldRowElement) {
+      $(self.oldRowElement).removeClass('drag-previous');
+    }
+
+    // Hack for IE6 that flickers uncontrollably if select lists are moved.
+    if (navigator.userAgent.indexOf('MSIE 6.') != -1) {
+      $('select', this.table).css('display', 'none');
+    }
+
+    // Hack for Konqueror, prevent the blur handler from firing.
+    // Konqueror always gives links focus, even after returning false on mousedown.
+    self.safeBlur = false;
+
+    // Call optional placeholder function.
+    self.onDrag();
+    return false;
+  });
+
+  // Prevent the anchor tag from jumping us to the top of the page.
+  handle.click(function () {
+    return false;
+  });
+
+  // Similar to the hover event, add a class when the handle is focused.
+  handle.focus(function () {
+    $(this).addClass('tabledrag-handle-hover');
+    self.safeBlur = true;
+  });
+
+  // Remove the handle class on blur and fire the same function as a mouseup.
+  handle.blur(function (event) {
+    $(this).removeClass('tabledrag-handle-hover');
+    if (self.rowObject && self.safeBlur) {
+      self.dropRow(event, self);
+    }
+  });
+
+  // Add arrow-key support to the handle.
+  handle.keydown(function (event) {
+    // If a rowObject doesn't yet exist and this isn't the tab key.
+    if (event.keyCode != 9 && !self.rowObject) {
+      self.rowObject = new self.row(item, 'keyboard', self.indentEnabled, self.maxDepth, true, self.tableSettings.draggableClass);
+    }
+
+    var keyChange = false;
+    switch (event.keyCode) {
+      case 37: // Left arrow.
+      case 63234: // Safari left arrow.
+        keyChange = true;
+        self.rowObject.indent(-1 * self.rtl);
+        break;
+      case 38: // Up arrow.
+      case 63232: // Safari up arrow.
+        var previousRow = $(self.rowObject.element).prev('tr').get(0);
+        while (previousRow && $(previousRow).is(':hidden')) {
+          previousRow = $(previousRow).prev('tr').get(0);
+        }
+        if (previousRow) {
+          self.safeBlur = false; // Do not allow the onBlur cleanup.
+          self.rowObject.direction = 'up';
+          keyChange = true;
+
+          if ($(item).is('.tabledrag-root')) {
+            // Swap with the previous top-level row.
+            var groupHeight = 0;
+            while (previousRow && $('.indentation', previousRow).length) {
+              previousRow = $(previousRow).prev('tr').get(0);
+              groupHeight += $(previousRow).is(':hidden') ? 0 : previousRow.offsetHeight;
+            }
+            if (previousRow) {
+              self.rowObject.swap('before', previousRow);
+              // No need to check for indentation, 0 is the only valid one.
+              window.scrollBy(0, -groupHeight);
+            }
+          }
+          else if (self.table.tBodies[0].rows[0] != previousRow || $(previousRow).is('.' + self.tableSettings.draggableClass)) {
+            // Swap with the previous row (unless previous row is the first one
+            // and undraggable).
+            self.rowObject.swap('before', previousRow);
+            self.rowObject.interval = null;
+            self.rowObject.indent(0);
+            window.scrollBy(0, -parseInt(item.offsetHeight, 10));
+          }
+          handle.get(0).focus(); // Regain focus after the DOM manipulation.
+        }
+        break;
+      case 39: // Right arrow.
+      case 63235: // Safari right arrow.
+        keyChange = true;
+        self.rowObject.indent(1 * self.rtl);
+        break;
+      case 40: // Down arrow.
+      case 63233: // Safari down arrow.
+        var nextRow = $(self.rowObject.group).filter(':last').next('tr').get(0);
+        while (nextRow && $(nextRow).is(':hidden')) {
+          nextRow = $(nextRow).next('tr').get(0);
+        }
+        if (nextRow) {
+          self.safeBlur = false; // Do not allow the onBlur cleanup.
+          self.rowObject.direction = 'down';
+          keyChange = true;
+
+          if ($(item).is('.tabledrag-root')) {
+            // Swap with the next group (necessarily a top-level one).
+            var groupHeight = 0;
+            var nextGroup = new self.row(nextRow, 'keyboard', self.indentEnabled, self.maxDepth, false, self.tableSettings.draggableClass);
+            if (nextGroup) {
+              $(nextGroup.group).each(function () {
+                groupHeight += $(this).is(':hidden') ? 0 : this.offsetHeight;
+              });
+              var nextGroupRow = $(nextGroup.group).filter(':last').get(0);
+              self.rowObject.swap('after', nextGroupRow);
+              // No need to check for indentation, 0 is the only valid one.
+              window.scrollBy(0, parseInt(groupHeight, 10));
+            }
+          }
+          else {
+            // Swap with the next row.
+            self.rowObject.swap('after', nextRow);
+            self.rowObject.interval = null;
+            self.rowObject.indent(0);
+            window.scrollBy(0, parseInt(item.offsetHeight, 10));
+          }
+          handle.get(0).focus(); // Regain focus after the DOM manipulation.
+        }
+        break;
+    }
+
+    if (self.rowObject && self.rowObject.changed == true) {
+      $(item).addClass('drag');
+      if (self.oldRowElement) {
+        $(self.oldRowElement).removeClass('drag-previous');
+      }
+      self.oldRowElement = item;
+      self.restripeTable();
+      self.onDrag();
+    }
+
+    // Returning false if we have an arrow key to prevent scrolling.
+    if (keyChange) {
+      return false;
+    }
+  });
+
+  // Compatibility addition, return false on keypress to prevent unwanted scrolling.
+  // IE and Safari will suppress scrolling on keydown, but all other browsers
+  // need to return false on keypress. http://www.quirksmode.org/js/keys.html
+  handle.keypress(function (event) {
+    switch (event.keyCode) {
+      case 37: // Left arrow.
+      case 38: // Up arrow.
+      case 39: // Right arrow.
+      case 40: // Down arrow.
+        return false;
+    }
+  });
+};
+
+/**
+ * Mousemove event handler, bound to document.
+ */
+Drupal.tableDrag.prototype.dragRow = function (event, self) {
+  if (self.dragObject) {
+    self.currentMouseCoords = self.mouseCoords(event);
+
+    var y = self.currentMouseCoords.y - self.dragObject.initMouseOffset.y;
+    var x = self.currentMouseCoords.x - self.dragObject.initMouseOffset.x;
+
+    // Check for row swapping and vertical scrolling.
+    if (y != self.oldY) {
+      self.rowObject.direction = y > self.oldY ? 'down' : 'up';
+      self.oldY = y; // Update the old value.
+
+      // Check if the window should be scrolled (and how fast).
+      var scrollAmount = self.checkScroll(self.currentMouseCoords.y);
+      // Stop any current scrolling.
+      clearInterval(self.scrollInterval);
+      // Continue scrolling if the mouse has moved in the scroll direction.
+      if (scrollAmount > 0 && self.rowObject.direction == 'down' || scrollAmount < 0 && self.rowObject.direction == 'up') {
+        self.setScroll(scrollAmount);
+      }
+
+      // If we have a valid target, perform the swap and restripe the table.
+      var currentRow = self.findDropTargetRow(x, y);
+      if (currentRow) {
+        if (self.rowObject.direction == 'down') {
+          self.rowObject.swap('after', currentRow, self);
+        }
+        else {
+          self.rowObject.swap('before', currentRow, self);
+        }
+        self.restripeTable();
+      }
+    }
+
+    // Similar to row swapping, handle indentations.
+    if (self.indentEnabled) {
+      var xDiff = self.currentMouseCoords.x - self.dragObject.indentMousePos.x;
+      // Set the number of indentations the mouse has been moved left or right.
+      var indentDiff = Math.round(xDiff / self.indentAmount * self.rtl);
+      // Indent the row with our estimated diff, which may be further
+      // restricted according to the rows around this row.
+      var indentChange = self.rowObject.indent(indentDiff);
+      // Update table and mouse indentations.
+      self.dragObject.indentMousePos.x += self.indentAmount * indentChange * self.rtl;
+      self.indentCount = Math.max(self.indentCount, self.rowObject.indents);
+    }
+
+    return false;
+  }
+};
+
+/**
+ * Mouseup event handler, bound to document.
+ * Blur event handler, bound to drag handle for keyboard support.
+ */
+Drupal.tableDrag.prototype.dropRow = function (event, self) {
+  // Drop row functionality shared between mouseup and blur events.
+  if (self.rowObject != null) {
+    var droppedRow = self.rowObject.element;
+    // The row is already in the right place so we just release it.
+    if (self.rowObject.changed == true) {
+      // Update the fields in the dropped row.
+      self.updateFields(droppedRow);
+
+      // If a setting exists for affecting the entire group, update all the
+      // fields in the entire dragged group.
+
+      if (!!self.tableSettings.group.fieldClass) {
+        for (var n in self.rowObject.children) {
+          self.updateField(self.rowObject.children[n], "group");
+        }
+      }
+
+      if (self.changed == false) {
+        self.changed = true;
+      }
+    }
+
+    if (self.indentEnabled) {
+      self.rowObject.removeIndentClasses();
+    }
+    if (self.oldRowElement) {
+      $(self.oldRowElement).removeClass('drag-previous');
+    }
+    $(droppedRow).removeClass('drag').addClass('drag-previous');
+    self.oldRowElement = droppedRow;
+    self.onDrop();
+    self.rowObject = null;
+  }
+
+  // Functionality specific only to mouseup event.
+  if (self.dragObject != null) {
+    $('.tabledrag-handle', droppedRow).removeClass('tabledrag-handle-hover');
+
+    self.dragObject = null;
+    $('body').removeClass('drag');
+    clearInterval(self.scrollInterval);
+
+    // Hack for IE6 that flickers uncontrollably if select lists are moved.
+    if (navigator.userAgent.indexOf('MSIE 6.') != -1) {
+      $('select', this.table).css('display', 'block');
+    }
+  }
+};
+
+/**
+ * Get the mouse coordinates from the event (allowing for browser differences).
+ */
+Drupal.tableDrag.prototype.mouseCoords = function (event) {
+  if (event.pageX || event.pageY) {
+    return { x: event.pageX, y: event.pageY };
+  }
+  return {
+    x: event.clientX + document.body.scrollLeft - document.body.clientLeft,
+    y: event.clientY + document.body.scrollTop  - document.body.clientTop
+  };
+};
+
+/**
+ * Given a target element and a mouse event, get the mouse offset from that
+ * element. To do this we need the element's position and the mouse position.
+ */
+Drupal.tableDrag.prototype.getMouseOffset = function (target, event) {
+  var docPos   = $(target).offset();
+  var mousePos = this.mouseCoords(event);
+  return { x: mousePos.x - docPos.left, y: mousePos.y - docPos.top };
+};
+
+/**
+ * Find the row the mouse is currently over. This row is then taken and swapped
+ * with the one being dragged.
+ *
+ * @param x
+ *   The x coordinate of the mouse on the page (not the screen).
+ * @param y
+ *   The y coordinate of the mouse on the page (not the screen).
+ */
+Drupal.tableDrag.prototype.findDropTargetRow = function (x, y) {
+  var rows = $(this.table.tBodies[0].rows).not(':hidden');
+  for (var n = 0; n < rows.length; n++) {
+    var row = rows[n];
+    var indentDiff = 0;
+    var rowY = $(row).offset().top;
+    // Because Safari does not report offsetHeight on table rows, but does on
+    // table cells, grab the firstChild of the row and use that instead.
+    // http://jacob.peargrove.com/blog/2006/technical/table-row-offsettop-bug-in-safari.
+    if (row.offsetHeight == 0) {
+      var rowHeight = parseInt(row.firstChild.offsetHeight, 10) / 2;
+    }
+    // Other browsers.
+    else {
+      var rowHeight = parseInt(row.offsetHeight, 10) / 2;
+    }
+
+    // Because we always insert before, we need to offset the height a bit.
+    if ((y > (rowY - rowHeight)) && (y < (rowY + rowHeight))) {
+      if (this.indentEnabled) {
+        // Check that this row is not a child of the row being dragged.
+        for (var n in this.rowObject.group) {
+          if (this.rowObject.group[n] == row) {
+            return null;
+          }
+        }
+      }
+      else {
+        // Do not allow a row to be swapped with itself.
+        if (row == this.rowObject.element) {
+          return null;
+        }
+      }
+
+      // Check that swapping with this row is allowed.
+      if (!this.rowObject.isValidSwap(row)) {
+        return null;
+      }
+
+      // We may have found the row the mouse just passed over, but it doesn't
+      // take into account hidden rows. Skip backwards until we find a draggable
+      // row.
+      while ($(row).is(':hidden') && $(row).prev('tr').is(':hidden')) {
+        row = $(row).prev('tr').get(0);
+      }
+      return row;
+    }
+  }
+  return null;
+};
+
+/**
+ * After the row is dropped, update the table fields according to the settings
+ * set for this table.
+ *
+ * @param changedRow
+ *   DOM object for the row that was just dropped.
+ */
+Drupal.tableDrag.prototype.updateFields = function (changedRow) {
+  for (var group in { group: 1, weight: 1, parent: 1 }) {
+    // Each group may have a different setting for relationship, so we find
+    // the source rows for each separately.
+    this.updateField(changedRow, group);
+  }
+};
+
+/**
+ * After the row is dropped, update a single table field according to specific
+ * settings.
+ *
+ * @param changedRow
+ *   DOM object for the row that was just dropped.
+ * @param group
+ *   The settings group on which field updates will occur.
+ */
+Drupal.tableDrag.prototype.updateField = function (changedRow, group) {
+  var rowSettings = this.rowSettings(group, changedRow);
+
+  // Set the row as its own target.
+  if (rowSettings.relationship == 'self' || rowSettings.relationship == 'group') {
+    var sourceRow = changedRow;
+  }
+  // Siblings are easy, check previous and next rows.
+  else if (rowSettings.relationship == 'sibling') {
+    var previousRow = $(changedRow).prev('tr').get(0);
+    var nextRow = $(changedRow).next('tr').get(0);
+    var sourceRow = changedRow;
+    if ($(previousRow).is('.' + this.tableSettings.draggableClass) && $('.' + group, previousRow).length) {
+      if (this.indentEnabled) {
+        if ($('.indentations', previousRow).length == $('.indentations', changedRow)) {
+          sourceRow = previousRow;
+        }
+      }
+      else {
+        sourceRow = previousRow;
+      }
+    }
+    else if ($(nextRow).is('.' + this.tableSettings.draggableClass) && $('.' + group, nextRow).length) {
+      if (this.indentEnabled) {
+        if ($('.indentations', nextRow).length == $('.indentations', changedRow)) {
+          sourceRow = nextRow;
+        }
+      }
+      else {
+        sourceRow = nextRow;
+      }
+    }
+  }
+  // Parents, look up the tree until we find a field not in this group.
+  // Go up as many parents as indentations in the changed row.
+  else if (rowSettings.relationship == 'parent') {
+    var previousRow = $(changedRow).prev('tr');
+    while (previousRow.length && $('.indentation', previousRow).length >= this.rowObject.indents) {
+      previousRow = previousRow.prev('tr');
+    }
+    // If we found a row.
+    if (previousRow.length) {
+      sourceRow = previousRow[0];
+    }
+    // Otherwise we went all the way to the left of the table without finding
+    // a parent, meaning this item has been placed at the root level.
+    else {
+      // Use the first row in the table as source, because it's guaranteed to
+      // be at the root level. Find the first item, then compare this row
+      // against it as a sibling.
+      sourceRow = $(this.table).find('tr.' + this.tableSettings.draggableClass + ':first').get(0);
+      if (sourceRow == this.rowObject.element) {
+        sourceRow = $(this.rowObject.group[this.rowObject.group.length - 1]).next('tr.' + this.tableSettings.draggableClass).get(0);
+      }
+      var useSibling = true;
+    }
+  }
+
+  // Because we may have moved the row from one category to another,
+  // take a look at our sibling and borrow its sources and targets.
+  this.copyDragClasses(sourceRow, changedRow, group);
+  rowSettings = this.rowSettings(group, changedRow);
+
+  // In the case that we're looking for a parent, but the row is at the top
+  // of the tree, copy our sibling's values.
+  if (useSibling) {
+    rowSettings.relationship = 'sibling';
+    rowSettings.source = rowSettings.fieldClass;
+  }
+
+  var targetClass = '.' + rowSettings.fieldClass;
+  var targetElement = $(targetClass, changedRow);
+
+  // Check if a target element exists in this row.
+  if (targetElement) {
+    var sourceClass = '.' + (rowSettings.relationship == 'parent' ? rowSettings.sourceFieldClass : rowSettings.fieldClass);
+    var sourceElement = $(sourceClass, sourceRow);
+    switch (rowSettings.action) {
+      case 'depth':
+        // Get the depth of the target row.
+        targetElement.val($('.indentation', sourceElement.closest('tr')).length);
+        break;
+      case 'match':
+        // Update the value.
+        targetElement.val(sourceElement.val());
+        break;
+      case 'order':
+        var siblings = this.rowObject.findSiblings(rowSettings);
+        if (targetElement.is('select')) {
+          // Get a list of acceptable values.
+          var values = [];
+          $('option', targetElement).each(function () {
+            values.push(this.value);
+          });
+          var maxVal = values[values.length - 1];
+          // Populate the values in the siblings.
+          $(targetClass, siblings).each(function () {
+            // If there are more items than possible values, assign the maximum value to the row.
+            if (values.length > 0) {
+              this.value = values.shift();
+            }
+            else {
+              this.value = maxVal;
+            }
+          });
+        }
+        else {
+          // Assume a numeric input field.
+          var weight = parseInt($(targetClass, siblings[0]).val(), 10) || 0;
+          $(targetClass, siblings).each(function () {
+            this.value = weight;
+            weight++;
+          });
+        }
+        break;
+    }
+  }
+};
+
+/**
+ * Copy all special tableDrag classes from one row's form elements to a
+ * different one, removing any special classes that the destination row
+ * may have had.
+ */
+Drupal.tableDrag.prototype.copyDragClasses = function (sourceRow, targetRow, group) {
+  var sourceElement = $('.' + group, sourceRow);
+  var targetElement = $('.' + group, targetRow);
+  if (sourceElement.length && targetElement.length) {
+    targetElement[0].className = sourceElement[0].className;
+  }
+};
+
+Drupal.tableDrag.prototype.checkScroll = function (cursorY) {
+  var de  = document.documentElement;
+  var b  = document.body;
+
+  var windowHeight = this.windowHeight = window.innerHeight || (de.clientHeight && de.clientWidth != 0 ? de.clientHeight : b.offsetHeight);
+  var scrollY = this.scrollY = (document.all ? (!de.scrollTop ? b.scrollTop : de.scrollTop) : (window.pageYOffset ? window.pageYOffset : window.scrollY));
+  var trigger = this.scrollSettings.trigger;
+  var delta = 0;
+
+  // Return a scroll speed relative to the edge of the screen.
+  if (cursorY - scrollY > windowHeight - trigger) {
+    delta = trigger / (windowHeight + scrollY - cursorY);
+    delta = (delta > 0 && delta < trigger) ? delta : trigger;
+    return delta * this.scrollSettings.amount;
+  }
+  else if (cursorY - scrollY < trigger) {
+    delta = trigger / (cursorY - scrollY);
+    delta = (delta > 0 && delta < trigger) ? delta : trigger;
+    return -delta * this.scrollSettings.amount;
+  }
+};
+
+Drupal.tableDrag.prototype.setScroll = function (scrollAmount) {
+  var self = this;
+
+  this.scrollInterval = setInterval(function () {
+    // Update the scroll values stored in the object.
+    self.checkScroll(self.currentMouseCoords.y);
+    var aboveTable = self.scrollY > self.table.topY;
+    var belowTable = self.scrollY + self.windowHeight < self.table.bottomY;
+    if (scrollAmount > 0 && belowTable || scrollAmount < 0 && aboveTable) {
+      window.scrollBy(0, scrollAmount);
+    }
+  }, this.scrollSettings.interval);
+};
+
+Drupal.tableDrag.prototype.restripeTable = function () {
+  // :even and :odd are reversed because jQuery counts from 0 and
+  // we count from 1, so we're out of sync.
+  // Match immediate children of the parent element to allow nesting.
+  $('> tbody > tr.' + this.tableSettings.draggableClass + ':visible, > tr.' + this.tableSettings.draggableClass + ':visible', this.table)
+    .removeClass('odd even')
+    .filter(':odd').addClass('even').end()
+    .filter(':even').addClass('odd');
+};
+
+/**
+ * Stub function. Allows a custom handler when a row begins dragging.
+ */
+Drupal.tableDrag.prototype.onDrag = function () {
+  this.$table.trigger('tabledrag:dragrow', this);
+  return null;
+};
+
+/**
+ * Stub function. Allows a custom handler when a row is dropped.
+ */
+Drupal.tableDrag.prototype.onDrop = function () {
+  this.$table.trigger('tabledrag:droprow', this);
+  return null;
+};
+
+/**
+ * Constructor to make a new object to manipulate a table row.
+ *
+ * @param tableRow
+ *   The DOM element for the table row we will be manipulating.
+ * @param method
+ *   The method in which this row is being moved. Either 'keyboard' or 'mouse'.
+ * @param indentEnabled
+ *   Whether the containing table uses indentations. Used for optimizations.
+ * @param maxDepth
+ *   The maximum amount of indentations this row may contain.
+ * @param addClasses
+ *   Whether we want to add classes to this row to indicate child relationships.
+ */
+Drupal.tableDrag.prototype.row = function (tableRow, method, indentEnabled, maxDepth, addClasses, draggableClass) {
+  this.element = tableRow;
+  this.method = method;
+  this.group = [tableRow];
+  this.groupDepth = $('.indentation', tableRow).length;
+  this.changed = false;
+  this.table = $(tableRow).closest('table').get(0);
+  this.indentEnabled = indentEnabled;
+  this.maxDepth = maxDepth;
+  this.direction = ''; // Direction the row is being moved.
+  this.draggableClass = draggableClass;
+
+  if (this.indentEnabled) {
+    this.indents = $('.indentation', tableRow).length;
+    this.children = this.findChildren(addClasses);
+    this.group = $.merge(this.group, this.children);
+    // Find the depth of this entire group.
+    for (var n = 0; n < this.group.length; n++) {
+      this.groupDepth = Math.max($('.indentation', this.group[n]).length, this.groupDepth);
+    }
+  }
+};
+
+/**
+ * Find all children of rowObject by indentation.
+ *
+ * @param addClasses
+ *   Whether we want to add classes to this row to indicate child relationships.
+ */
+Drupal.tableDrag.prototype.row.prototype.findChildren = function (addClasses) {
+  var parentIndentation = this.indents;
+  var currentRow = $(this.element, this.table).next('tr.' + this.draggableClass);
+  var rows = [];
+  var child = 0;
+  while (currentRow.length) {
+    var rowIndentation = $('.indentation', currentRow).length;
+    // A greater indentation indicates this is a child.
+    if (rowIndentation > parentIndentation) {
+      child++;
+      rows.push(currentRow[0]);
+      if (addClasses) {
+        $('.indentation', currentRow).each(function (indentNum) {
+          if (child == 1 && (indentNum == parentIndentation)) {
+            $(this).addClass('tree-child-first');
+          }
+          if (indentNum == parentIndentation) {
+            $(this).addClass('tree-child');
+          }
+          else if (indentNum > parentIndentation) {
+            $(this).addClass('tree-child-horizontal');
+          }
+        });
+      }
+    }
+    else {
+      break;
+    }
+    currentRow = currentRow.next('tr.' + this.draggableClass);
+  }
+  if (addClasses && rows.length) {
+    $('.indentation:nth-child(' + (parentIndentation + 1) + ')', rows[rows.length - 1]).addClass('tree-child-last');
+  }
+  return rows;
+};
+
+/**
+ * Ensure that two rows are allowed to be swapped.
+ *
+ * @param row
+ *   DOM object for the row being considered for swapping.
+ */
+Drupal.tableDrag.prototype.row.prototype.isValidSwap = function (row) {
+  if (this.indentEnabled) {
+    var prevRow, nextRow;
+    if (this.direction == 'down') {
+      prevRow = row;
+      nextRow = $(row).next('tr').get(0);
+    }
+    else {
+      prevRow = $(row).prev('tr').get(0);
+      nextRow = row;
+    }
+    this.interval = this.validIndentInterval(prevRow, nextRow);
+
+    // We have an invalid swap if the valid indentations interval is empty.
+    if (this.interval.min > this.interval.max) {
+      return false;
+    }
+  }
+
+  // Do not let an un-draggable first row have anything put before it.
+  if (this.table.tBodies[0].rows[0] == row && $(row).is(':not(.' + this.draggableClass + ')')) {
+    return false;
+  }
+
+  return true;
+};
+
+/**
+ * Perform the swap between two rows.
+ *
+ * @param position
+ *   Whether the swap will occur 'before' or 'after' the given row.
+ * @param row
+ *   DOM element what will be swapped with the row group.
+ */
+Drupal.tableDrag.prototype.row.prototype.swap = function (position, row) {
+  // @todo Drupal.detachBehaviors(this.group, Drupal.settings, 'move');
+  $(row)[position](this.group);
+  // @todo Drupal.attachBehaviors(this.group, Drupal.settings);
+  this.changed = true;
+  this.onSwap(row);
+};
+
+/**
+ * Determine the valid indentations interval for the row at a given position
+ * in the table.
+ *
+ * @param prevRow
+ *   DOM object for the row before the tested position
+ *   (or null for first position in the table).
+ * @param nextRow
+ *   DOM object for the row after the tested position
+ *   (or null for last position in the table).
+ */
+Drupal.tableDrag.prototype.row.prototype.validIndentInterval = function (prevRow, nextRow) {
+  var minIndent, maxIndent;
+
+  // Minimum indentation:
+  // Do not orphan the next row.
+  minIndent = nextRow ? $('.indentation', nextRow).length : 0;
+
+  // Maximum indentation:
+  if (!prevRow || $(prevRow).is(':not(.' + this.draggableClass + ')') || $(this.element).is('.tabledrag-root')) {
+    // Do not indent:
+    // - the first row in the table,
+    // - rows dragged below a non-draggable row,
+    // - 'root' rows.
+    maxIndent = 0;
+  }
+  else {
+    // Do not go deeper than as a child of the previous row.
+    maxIndent = $('.indentation', prevRow).length + ($(prevRow).is('.tabledrag-leaf') ? 0 : 1);
+    // Limit by the maximum allowed depth for the table.
+    if (this.maxDepth) {
+      maxIndent = Math.min(maxIndent, this.maxDepth - (this.groupDepth - this.indents));
+    }
+  }
+
+  return { 'min': minIndent, 'max': maxIndent };
+};
+
+/**
+ * Indent a row within the legal bounds of the table.
+ *
+ * @param indentDiff
+ *   The number of additional indentations proposed for the row (can be
+ *   positive or negative). This number will be adjusted to nearest valid
+ *   indentation level for the row.
+ */
+Drupal.tableDrag.prototype.row.prototype.indent = function (indentDiff) {
+  // Determine the valid indentations interval if not available yet.
+  if (!this.interval) {
+    var prevRow = $(this.element).prev('tr').get(0);
+    var nextRow = $(this.group).filter(':last').next('tr').get(0);
+    this.interval = this.validIndentInterval(prevRow, nextRow);
+  }
+
+  // Adjust to the nearest valid indentation.
+  var indent = this.indents + indentDiff;
+  indent = Math.max(indent, this.interval.min);
+  indent = Math.min(indent, this.interval.max);
+  indentDiff = indent - this.indents;
+
+  for (var n = 1; n <= Math.abs(indentDiff); n++) {
+    // Add or remove indentations.
+    if (indentDiff < 0) {
+      $('.indentation:first', this.group).remove();
+      this.indents--;
+    }
+    else {
+      $('td:first', this.group).prepend(Drupal.theme('tableDragIndentation'));
+      this.indents++;
+    }
+  }
+  if (indentDiff) {
+    // Update indentation for this row.
+    this.changed = true;
+    this.groupDepth += indentDiff;
+    this.onIndent();
+  }
+
+  return indentDiff;
+};
+
+/**
+ * Find all siblings for a row, either according to its subgroup or indentation.
+ * Note that the passed-in row is included in the list of siblings.
+ *
+ * @param settings
+ *   The field settings we're using to identify what constitutes a sibling.
+ */
+Drupal.tableDrag.prototype.row.prototype.findSiblings = function (rowSettings) {
+  var siblings = [];
+  var directions = ['prev', 'next'];
+  var rowIndentation = this.indents;
+  for (var d = 0; d < directions.length; d++) {
+    var checkRow = $(this.element)[directions[d]]();
+    while (checkRow.length) {
+      // Check that the sibling contains a similar target field.
+      if ($('.' + rowSettings.target, checkRow)) {
+        // Either add immediately if this is a flat table, or check to ensure
+        // that this row has the same level of indentation.
+        if (this.indentEnabled) {
+          var checkRowIndentation = $('.indentation', checkRow).length;
+        }
+
+        if (!(this.indentEnabled) || (checkRowIndentation == rowIndentation)) {
+          siblings.push(checkRow[0]);
+        }
+        else if (checkRowIndentation < rowIndentation) {
+          // No need to keep looking for siblings when we get to a parent.
+          break;
+        }
+      }
+      else {
+        break;
+      }
+      checkRow = $(checkRow)[directions[d]]();
+    }
+    // Since siblings are added in reverse order for previous, reverse the
+    // completed list of previous siblings. Add the current row and continue.
+    if (directions[d] == 'prev') {
+      siblings.reverse();
+      siblings.push(this.element);
+    }
+  }
+  return siblings;
+};
+
+/**
+ * Remove indentation helper classes from the current row group.
+ */
+Drupal.tableDrag.prototype.row.prototype.removeIndentClasses = function () {
+  for (var n in this.children) {
+    $('.indentation', this.children[n])
+      .removeClass('tree-child')
+      .removeClass('tree-child-first')
+      .removeClass('tree-child-last')
+      .removeClass('tree-child-horizontal');
+  }
+};
+
+/**
+ * Stub function. Allows a custom handler when a row is indented.
+ */
+Drupal.tableDrag.prototype.row.prototype.onIndent = function () {
+  return null;
+};
+
+/**
+ * Stub function. Allows a custom handler when a row is swapped.
+ */
+Drupal.tableDrag.prototype.row.prototype.onSwap = function (swappedRow) {
+  return null;
+};
+
+/**
+ * Dummy implementation of Drupal.t(). 
+ * The Drupal.t() function is Drupal's localization function.
+ * @todo - use in the future to localize the plugin.
+ */
+Drupal.t = function(string) {
+  return string;
+}
+
+/**
+ * Verbatim copy of Drupal.theme().
+ * Drupal.theme() is a function that allows to quickly re-use small snippets
+ * of HTML markup.
+ */
+Drupal.theme = function (func) {
+  var args = Array.prototype.slice.apply(arguments, [1]);
+
+  return (Drupal.theme[func] || Drupal.theme.prototype[func]).apply(this, args);
+};
+
+Drupal.theme.prototype.tableDragChangedMarker = function () {
+  return '<span class="warning tabledrag-changed">*</span>';
+};
+
+Drupal.theme.prototype.tableDragIndentation = function () {
+  return '<div class="indentation">&nbsp;</div>';
+};
+
+
+})(jQuery);
+
 /*!
  * Bootstrap v3.3.4 (http://getbootstrap.com)
  * Copyright 2011-2015 Twitter, Inc.
@@ -32599,6 +33801,3183 @@ module.exports = Array.isArray || function (arr) {
 
 },{}]},{},[1])(1)
 });
+/*! jQuery Timepicker Addon - v1.5.3 - 2015-04-19
+* http://trentrichardson.com/examples/timepicker
+* Copyright (c) 2015 Trent Richardson; Licensed MIT */
+(function (factory) {
+	if (typeof define === 'function' && define.amd) {
+		define(['jquery', 'jquery.ui'], factory);
+	} else {
+		factory(jQuery);
+	}
+}(function ($) {
+
+	/*
+	* Lets not redefine timepicker, Prevent "Uncaught RangeError: Maximum call stack size exceeded"
+	*/
+	$.ui.timepicker = $.ui.timepicker || {};
+	if ($.ui.timepicker.version) {
+		return;
+	}
+
+	/*
+	* Extend jQueryUI, get it started with our version number
+	*/
+	$.extend($.ui, {
+		timepicker: {
+			version: "1.5.3"
+		}
+	});
+
+	/* 
+	* Timepicker manager.
+	* Use the singleton instance of this class, $.timepicker, to interact with the time picker.
+	* Settings for (groups of) time pickers are maintained in an instance object,
+	* allowing multiple different settings on the same page.
+	*/
+	var Timepicker = function () {
+		this.regional = []; // Available regional settings, indexed by language code
+		this.regional[''] = { // Default regional settings
+			currentText: 'Now',
+			closeText: 'Done',
+			amNames: ['AM', 'A'],
+			pmNames: ['PM', 'P'],
+			timeFormat: 'HH:mm',
+			timeSuffix: '',
+			timeOnlyTitle: 'Choose Time',
+			timeText: 'Time',
+			hourText: 'Hour',
+			minuteText: 'Minute',
+			secondText: 'Second',
+			millisecText: 'Millisecond',
+			microsecText: 'Microsecond',
+			timezoneText: 'Time Zone',
+			isRTL: false
+		};
+		this._defaults = { // Global defaults for all the datetime picker instances
+			showButtonPanel: true,
+			timeOnly: false,
+			timeOnlyShowDate: false,
+			showHour: null,
+			showMinute: null,
+			showSecond: null,
+			showMillisec: null,
+			showMicrosec: null,
+			showTimezone: null,
+			showTime: true,
+			stepHour: 1,
+			stepMinute: 1,
+			stepSecond: 1,
+			stepMillisec: 1,
+			stepMicrosec: 1,
+			hour: 0,
+			minute: 0,
+			second: 0,
+			millisec: 0,
+			microsec: 0,
+			timezone: null,
+			hourMin: 0,
+			minuteMin: 0,
+			secondMin: 0,
+			millisecMin: 0,
+			microsecMin: 0,
+			hourMax: 23,
+			minuteMax: 59,
+			secondMax: 59,
+			millisecMax: 999,
+			microsecMax: 999,
+			minDateTime: null,
+			maxDateTime: null,
+			maxTime: null,
+			minTime: null,
+			onSelect: null,
+			hourGrid: 0,
+			minuteGrid: 0,
+			secondGrid: 0,
+			millisecGrid: 0,
+			microsecGrid: 0,
+			alwaysSetTime: true,
+			separator: ' ',
+			altFieldTimeOnly: true,
+			altTimeFormat: null,
+			altSeparator: null,
+			altTimeSuffix: null,
+			altRedirectFocus: true,
+			pickerTimeFormat: null,
+			pickerTimeSuffix: null,
+			showTimepicker: true,
+			timezoneList: null,
+			addSliderAccess: false,
+			sliderAccessArgs: null,
+			controlType: 'slider',
+			oneLine: false,
+			defaultValue: null,
+			parse: 'strict',
+			afterInject: null
+		};
+		$.extend(this._defaults, this.regional['']);
+	};
+
+	$.extend(Timepicker.prototype, {
+		$input: null,
+		$altInput: null,
+		$timeObj: null,
+		inst: null,
+		hour_slider: null,
+		minute_slider: null,
+		second_slider: null,
+		millisec_slider: null,
+		microsec_slider: null,
+		timezone_select: null,
+		maxTime: null,
+		minTime: null,
+		hour: 0,
+		minute: 0,
+		second: 0,
+		millisec: 0,
+		microsec: 0,
+		timezone: null,
+		hourMinOriginal: null,
+		minuteMinOriginal: null,
+		secondMinOriginal: null,
+		millisecMinOriginal: null,
+		microsecMinOriginal: null,
+		hourMaxOriginal: null,
+		minuteMaxOriginal: null,
+		secondMaxOriginal: null,
+		millisecMaxOriginal: null,
+		microsecMaxOriginal: null,
+		ampm: '',
+		formattedDate: '',
+		formattedTime: '',
+		formattedDateTime: '',
+		timezoneList: null,
+		units: ['hour', 'minute', 'second', 'millisec', 'microsec'],
+		support: {},
+		control: null,
+
+		/* 
+		* Override the default settings for all instances of the time picker.
+		* @param  {Object} settings  object - the new settings to use as defaults (anonymous object)
+		* @return {Object} the manager object
+		*/
+		setDefaults: function (settings) {
+			extendRemove(this._defaults, settings || {});
+			return this;
+		},
+
+		/*
+		* Create a new Timepicker instance
+		*/
+		_newInst: function ($input, opts) {
+			var tp_inst = new Timepicker(),
+				inlineSettings = {},
+				fns = {},
+				overrides, i;
+
+			for (var attrName in this._defaults) {
+				if (this._defaults.hasOwnProperty(attrName)) {
+					var attrValue = $input.attr('time:' + attrName);
+					if (attrValue) {
+						try {
+							inlineSettings[attrName] = eval(attrValue);
+						} catch (err) {
+							inlineSettings[attrName] = attrValue;
+						}
+					}
+				}
+			}
+
+			overrides = {
+				beforeShow: function (input, dp_inst) {
+					if ($.isFunction(tp_inst._defaults.evnts.beforeShow)) {
+						return tp_inst._defaults.evnts.beforeShow.call($input[0], input, dp_inst, tp_inst);
+					}
+				},
+				onChangeMonthYear: function (year, month, dp_inst) {
+					// Update the time as well : this prevents the time from disappearing from the $input field.
+					// tp_inst._updateDateTime(dp_inst);
+					if ($.isFunction(tp_inst._defaults.evnts.onChangeMonthYear)) {
+						tp_inst._defaults.evnts.onChangeMonthYear.call($input[0], year, month, dp_inst, tp_inst);
+					}
+				},
+				onClose: function (dateText, dp_inst) {
+					if (tp_inst.timeDefined === true && $input.val() !== '') {
+						tp_inst._updateDateTime(dp_inst);
+					}
+					if ($.isFunction(tp_inst._defaults.evnts.onClose)) {
+						tp_inst._defaults.evnts.onClose.call($input[0], dateText, dp_inst, tp_inst);
+					}
+				}
+			};
+			for (i in overrides) {
+				if (overrides.hasOwnProperty(i)) {
+					fns[i] = opts[i] || null;
+				}
+			}
+
+			tp_inst._defaults = $.extend({}, this._defaults, inlineSettings, opts, overrides, {
+				evnts: fns,
+				timepicker: tp_inst // add timepicker as a property of datepicker: $.datepicker._get(dp_inst, 'timepicker');
+			});
+			tp_inst.amNames = $.map(tp_inst._defaults.amNames, function (val) {
+				return val.toUpperCase();
+			});
+			tp_inst.pmNames = $.map(tp_inst._defaults.pmNames, function (val) {
+				return val.toUpperCase();
+			});
+
+			// detect which units are supported
+			tp_inst.support = detectSupport(
+					tp_inst._defaults.timeFormat + 
+					(tp_inst._defaults.pickerTimeFormat ? tp_inst._defaults.pickerTimeFormat : '') +
+					(tp_inst._defaults.altTimeFormat ? tp_inst._defaults.altTimeFormat : ''));
+
+			// controlType is string - key to our this._controls
+			if (typeof(tp_inst._defaults.controlType) === 'string') {
+				if (tp_inst._defaults.controlType === 'slider' && typeof($.ui.slider) === 'undefined') {
+					tp_inst._defaults.controlType = 'select';
+				}
+				tp_inst.control = tp_inst._controls[tp_inst._defaults.controlType];
+			}
+			// controlType is an object and must implement create, options, value methods
+			else {
+				tp_inst.control = tp_inst._defaults.controlType;
+			}
+
+			// prep the timezone options
+			var timezoneList = [-720, -660, -600, -570, -540, -480, -420, -360, -300, -270, -240, -210, -180, -120, -60,
+					0, 60, 120, 180, 210, 240, 270, 300, 330, 345, 360, 390, 420, 480, 525, 540, 570, 600, 630, 660, 690, 720, 765, 780, 840];
+			if (tp_inst._defaults.timezoneList !== null) {
+				timezoneList = tp_inst._defaults.timezoneList;
+			}
+			var tzl = timezoneList.length, tzi = 0, tzv = null;
+			if (tzl > 0 && typeof timezoneList[0] !== 'object') {
+				for (; tzi < tzl; tzi++) {
+					tzv = timezoneList[tzi];
+					timezoneList[tzi] = { value: tzv, label: $.timepicker.timezoneOffsetString(tzv, tp_inst.support.iso8601) };
+				}
+			}
+			tp_inst._defaults.timezoneList = timezoneList;
+
+			// set the default units
+			tp_inst.timezone = tp_inst._defaults.timezone !== null ? $.timepicker.timezoneOffsetNumber(tp_inst._defaults.timezone) :
+							((new Date()).getTimezoneOffset() * -1);
+			tp_inst.hour = tp_inst._defaults.hour < tp_inst._defaults.hourMin ? tp_inst._defaults.hourMin :
+							tp_inst._defaults.hour > tp_inst._defaults.hourMax ? tp_inst._defaults.hourMax : tp_inst._defaults.hour;
+			tp_inst.minute = tp_inst._defaults.minute < tp_inst._defaults.minuteMin ? tp_inst._defaults.minuteMin :
+							tp_inst._defaults.minute > tp_inst._defaults.minuteMax ? tp_inst._defaults.minuteMax : tp_inst._defaults.minute;
+			tp_inst.second = tp_inst._defaults.second < tp_inst._defaults.secondMin ? tp_inst._defaults.secondMin :
+							tp_inst._defaults.second > tp_inst._defaults.secondMax ? tp_inst._defaults.secondMax : tp_inst._defaults.second;
+			tp_inst.millisec = tp_inst._defaults.millisec < tp_inst._defaults.millisecMin ? tp_inst._defaults.millisecMin :
+							tp_inst._defaults.millisec > tp_inst._defaults.millisecMax ? tp_inst._defaults.millisecMax : tp_inst._defaults.millisec;
+			tp_inst.microsec = tp_inst._defaults.microsec < tp_inst._defaults.microsecMin ? tp_inst._defaults.microsecMin :
+							tp_inst._defaults.microsec > tp_inst._defaults.microsecMax ? tp_inst._defaults.microsecMax : tp_inst._defaults.microsec;
+			tp_inst.ampm = '';
+			tp_inst.$input = $input;
+
+			if (tp_inst._defaults.altField) {
+				tp_inst.$altInput = $(tp_inst._defaults.altField);
+				if (tp_inst._defaults.altRedirectFocus === true) {
+					tp_inst.$altInput.css({
+						cursor: 'pointer'
+					}).focus(function () {
+						$input.trigger("focus");
+					});
+				}
+			}
+
+			if (tp_inst._defaults.minDate === 0 || tp_inst._defaults.minDateTime === 0) {
+				tp_inst._defaults.minDate = new Date();
+			}
+			if (tp_inst._defaults.maxDate === 0 || tp_inst._defaults.maxDateTime === 0) {
+				tp_inst._defaults.maxDate = new Date();
+			}
+
+			// datepicker needs minDate/maxDate, timepicker needs minDateTime/maxDateTime..
+			if (tp_inst._defaults.minDate !== undefined && tp_inst._defaults.minDate instanceof Date) {
+				tp_inst._defaults.minDateTime = new Date(tp_inst._defaults.minDate.getTime());
+			}
+			if (tp_inst._defaults.minDateTime !== undefined && tp_inst._defaults.minDateTime instanceof Date) {
+				tp_inst._defaults.minDate = new Date(tp_inst._defaults.minDateTime.getTime());
+			}
+			if (tp_inst._defaults.maxDate !== undefined && tp_inst._defaults.maxDate instanceof Date) {
+				tp_inst._defaults.maxDateTime = new Date(tp_inst._defaults.maxDate.getTime());
+			}
+			if (tp_inst._defaults.maxDateTime !== undefined && tp_inst._defaults.maxDateTime instanceof Date) {
+				tp_inst._defaults.maxDate = new Date(tp_inst._defaults.maxDateTime.getTime());
+			}
+			tp_inst.$input.bind('focus', function () {
+				tp_inst._onFocus();
+			});
+
+			return tp_inst;
+		},
+
+		/*
+		* add our sliders to the calendar
+		*/
+		_addTimePicker: function (dp_inst) {
+			var currDT = $.trim((this.$altInput && this._defaults.altFieldTimeOnly) ? this.$input.val() + ' ' + this.$altInput.val() : this.$input.val());
+
+			this.timeDefined = this._parseTime(currDT);
+			this._limitMinMaxDateTime(dp_inst, false);
+			this._injectTimePicker();
+			this._afterInject();
+		},
+
+		/*
+		* parse the time string from input value or _setTime
+		*/
+		_parseTime: function (timeString, withDate) {
+			if (!this.inst) {
+				this.inst = $.datepicker._getInst(this.$input[0]);
+			}
+
+			if (withDate || !this._defaults.timeOnly) {
+				var dp_dateFormat = $.datepicker._get(this.inst, 'dateFormat');
+				try {
+					var parseRes = parseDateTimeInternal(dp_dateFormat, this._defaults.timeFormat, timeString, $.datepicker._getFormatConfig(this.inst), this._defaults);
+					if (!parseRes.timeObj) {
+						return false;
+					}
+					$.extend(this, parseRes.timeObj);
+				} catch (err) {
+					$.timepicker.log("Error parsing the date/time string: " + err +
+									"\ndate/time string = " + timeString +
+									"\ntimeFormat = " + this._defaults.timeFormat +
+									"\ndateFormat = " + dp_dateFormat);
+					return false;
+				}
+				return true;
+			} else {
+				var timeObj = $.datepicker.parseTime(this._defaults.timeFormat, timeString, this._defaults);
+				if (!timeObj) {
+					return false;
+				}
+				$.extend(this, timeObj);
+				return true;
+			}
+		},
+
+		/*
+		* Handle callback option after injecting timepicker
+		*/
+		_afterInject: function() {
+			var o = this.inst.settings;
+			if ($.isFunction(o.afterInject)) {
+				o.afterInject.call(this);
+			}
+		},
+
+		/*
+		* generate and inject html for timepicker into ui datepicker
+		*/
+		_injectTimePicker: function () {
+			var $dp = this.inst.dpDiv,
+				o = this.inst.settings,
+				tp_inst = this,
+				litem = '',
+				uitem = '',
+				show = null,
+				max = {},
+				gridSize = {},
+				size = null,
+				i = 0,
+				l = 0;
+
+			// Prevent displaying twice
+			if ($dp.find("div.ui-timepicker-div").length === 0 && o.showTimepicker) {
+				var noDisplay = ' ui_tpicker_unit_hide',
+					html = '<div class="ui-timepicker-div' + (o.isRTL ? ' ui-timepicker-rtl' : '') + (o.oneLine && o.controlType === 'select' ? ' ui-timepicker-oneLine' : '') + '"><dl>' + '<dt class="ui_tpicker_time_label"' + ((o.showTime) ? '' : noDisplay) + '>' + o.timeText + '</dt>' +
+								'<dd class="ui_tpicker_time '+ ((o.showTime) ? '' : noDisplay) + '"></dd>';
+
+				// Create the markup
+				for (i = 0, l = this.units.length; i < l; i++) {
+					litem = this.units[i];
+					uitem = litem.substr(0, 1).toUpperCase() + litem.substr(1);
+					show = o['show' + uitem] !== null ? o['show' + uitem] : this.support[litem];
+
+					// Added by Peter Medeiros:
+					// - Figure out what the hour/minute/second max should be based on the step values.
+					// - Example: if stepMinute is 15, then minMax is 45.
+					max[litem] = parseInt((o[litem + 'Max'] - ((o[litem + 'Max'] - o[litem + 'Min']) % o['step' + uitem])), 10);
+					gridSize[litem] = 0;
+
+					html += '<dt class="ui_tpicker_' + litem + '_label' + (show ? '' : noDisplay) + '">' + o[litem + 'Text'] + '</dt>' +
+								'<dd class="ui_tpicker_' + litem + (show ? '' : noDisplay) + '"><div class="ui_tpicker_' + litem + '_slider' + (show ? '' : noDisplay) + '"></div>';
+
+					if (show && o[litem + 'Grid'] > 0) {
+						html += '<div style="padding-left: 1px"><table class="ui-tpicker-grid-label"><tr>';
+
+						if (litem === 'hour') {
+							for (var h = o[litem + 'Min']; h <= max[litem]; h += parseInt(o[litem + 'Grid'], 10)) {
+								gridSize[litem]++;
+								var tmph = $.datepicker.formatTime(this.support.ampm ? 'hht' : 'HH', {hour: h}, o);
+								html += '<td data-for="' + litem + '">' + tmph + '</td>';
+							}
+						}
+						else {
+							for (var m = o[litem + 'Min']; m <= max[litem]; m += parseInt(o[litem + 'Grid'], 10)) {
+								gridSize[litem]++;
+								html += '<td data-for="' + litem + '">' + ((m < 10) ? '0' : '') + m + '</td>';
+							}
+						}
+
+						html += '</tr></table></div>';
+					}
+					html += '</dd>';
+				}
+				
+				// Timezone
+				var showTz = o.showTimezone !== null ? o.showTimezone : this.support.timezone;
+				html += '<dt class="ui_tpicker_timezone_label' + (showTz ? '' : noDisplay) + '">' + o.timezoneText + '</dt>';
+				html += '<dd class="ui_tpicker_timezone' + (showTz ? '' : noDisplay) + '"></dd>';
+
+				// Create the elements from string
+				html += '</dl></div>';
+				var $tp = $(html);
+
+				// if we only want time picker...
+				if (o.timeOnly === true) {
+					$tp.prepend('<div class="ui-widget-header ui-helper-clearfix ui-corner-all">' + '<div class="ui-datepicker-title">' + o.timeOnlyTitle + '</div>' + '</div>');
+					$dp.find('.ui-datepicker-header, .ui-datepicker-calendar').hide();
+				}
+				
+				// add sliders, adjust grids, add events
+				for (i = 0, l = tp_inst.units.length; i < l; i++) {
+					litem = tp_inst.units[i];
+					uitem = litem.substr(0, 1).toUpperCase() + litem.substr(1);
+					show = o['show' + uitem] !== null ? o['show' + uitem] : this.support[litem];
+
+					// add the slider
+					tp_inst[litem + '_slider'] = tp_inst.control.create(tp_inst, $tp.find('.ui_tpicker_' + litem + '_slider'), litem, tp_inst[litem], o[litem + 'Min'], max[litem], o['step' + uitem]);
+
+					// adjust the grid and add click event
+					if (show && o[litem + 'Grid'] > 0) {
+						size = 100 * gridSize[litem] * o[litem + 'Grid'] / (max[litem] - o[litem + 'Min']);
+						$tp.find('.ui_tpicker_' + litem + ' table').css({
+							width: size + "%",
+							marginLeft: o.isRTL ? '0' : ((size / (-2 * gridSize[litem])) + "%"),
+							marginRight: o.isRTL ? ((size / (-2 * gridSize[litem])) + "%") : '0',
+							borderCollapse: 'collapse'
+						}).find("td").click(function (e) {
+								var $t = $(this),
+									h = $t.html(),
+									n = parseInt(h.replace(/[^0-9]/g), 10),
+									ap = h.replace(/[^apm]/ig),
+									f = $t.data('for'); // loses scope, so we use data-for
+
+								if (f === 'hour') {
+									if (ap.indexOf('p') !== -1 && n < 12) {
+										n += 12;
+									}
+									else {
+										if (ap.indexOf('a') !== -1 && n === 12) {
+											n = 0;
+										}
+									}
+								}
+								
+								tp_inst.control.value(tp_inst, tp_inst[f + '_slider'], litem, n);
+
+								tp_inst._onTimeChange();
+								tp_inst._onSelectHandler();
+							}).css({
+								cursor: 'pointer',
+								width: (100 / gridSize[litem]) + '%',
+								textAlign: 'center',
+								overflow: 'hidden'
+							});
+					} // end if grid > 0
+				} // end for loop
+
+				// Add timezone options
+				this.timezone_select = $tp.find('.ui_tpicker_timezone').append('<select></select>').find("select");
+				$.fn.append.apply(this.timezone_select,
+				$.map(o.timezoneList, function (val, idx) {
+					return $("<option />").val(typeof val === "object" ? val.value : val).text(typeof val === "object" ? val.label : val);
+				}));
+				if (typeof(this.timezone) !== "undefined" && this.timezone !== null && this.timezone !== "") {
+					var local_timezone = (new Date(this.inst.selectedYear, this.inst.selectedMonth, this.inst.selectedDay, 12)).getTimezoneOffset() * -1;
+					if (local_timezone === this.timezone) {
+						selectLocalTimezone(tp_inst);
+					} else {
+						this.timezone_select.val(this.timezone);
+					}
+				} else {
+					if (typeof(this.hour) !== "undefined" && this.hour !== null && this.hour !== "") {
+						this.timezone_select.val(o.timezone);
+					} else {
+						selectLocalTimezone(tp_inst);
+					}
+				}
+				this.timezone_select.change(function () {
+					tp_inst._onTimeChange();
+					tp_inst._onSelectHandler();
+					tp_inst._afterInject();
+				});
+				// End timezone options
+				
+				// inject timepicker into datepicker
+				var $buttonPanel = $dp.find('.ui-datepicker-buttonpane');
+				if ($buttonPanel.length) {
+					$buttonPanel.before($tp);
+				} else {
+					$dp.append($tp);
+				}
+
+				this.$timeObj = $tp.find('.ui_tpicker_time');
+
+				if (this.inst !== null) {
+					var timeDefined = this.timeDefined;
+					this._onTimeChange();
+					this.timeDefined = timeDefined;
+				}
+
+				// slideAccess integration: http://trentrichardson.com/2011/11/11/jquery-ui-sliders-and-touch-accessibility/
+				if (this._defaults.addSliderAccess) {
+					var sliderAccessArgs = this._defaults.sliderAccessArgs,
+						rtl = this._defaults.isRTL;
+					sliderAccessArgs.isRTL = rtl;
+						
+					setTimeout(function () { // fix for inline mode
+						if ($tp.find('.ui-slider-access').length === 0) {
+							$tp.find('.ui-slider:visible').sliderAccess(sliderAccessArgs);
+
+							// fix any grids since sliders are shorter
+							var sliderAccessWidth = $tp.find('.ui-slider-access:eq(0)').outerWidth(true);
+							if (sliderAccessWidth) {
+								$tp.find('table:visible').each(function () {
+									var $g = $(this),
+										oldWidth = $g.outerWidth(),
+										oldMarginLeft = $g.css(rtl ? 'marginRight' : 'marginLeft').toString().replace('%', ''),
+										newWidth = oldWidth - sliderAccessWidth,
+										newMarginLeft = ((oldMarginLeft * newWidth) / oldWidth) + '%',
+										css = { width: newWidth, marginRight: 0, marginLeft: 0 };
+									css[rtl ? 'marginRight' : 'marginLeft'] = newMarginLeft;
+									$g.css(css);
+								});
+							}
+						}
+					}, 10);
+				}
+				// end slideAccess integration
+
+				tp_inst._limitMinMaxDateTime(this.inst, true);
+			}
+		},
+
+		/*
+		* This function tries to limit the ability to go outside the
+		* min/max date range
+		*/
+		_limitMinMaxDateTime: function (dp_inst, adjustSliders) {
+			var o = this._defaults,
+				dp_date = new Date(dp_inst.selectedYear, dp_inst.selectedMonth, dp_inst.selectedDay);
+
+			if (!this._defaults.showTimepicker) {
+				return;
+			} // No time so nothing to check here
+
+			if ($.datepicker._get(dp_inst, 'minDateTime') !== null && $.datepicker._get(dp_inst, 'minDateTime') !== undefined && dp_date) {
+				var minDateTime = $.datepicker._get(dp_inst, 'minDateTime'),
+					minDateTimeDate = new Date(minDateTime.getFullYear(), minDateTime.getMonth(), minDateTime.getDate(), 0, 0, 0, 0);
+
+				if (this.hourMinOriginal === null || this.minuteMinOriginal === null || this.secondMinOriginal === null || this.millisecMinOriginal === null || this.microsecMinOriginal === null) {
+					this.hourMinOriginal = o.hourMin;
+					this.minuteMinOriginal = o.minuteMin;
+					this.secondMinOriginal = o.secondMin;
+					this.millisecMinOriginal = o.millisecMin;
+					this.microsecMinOriginal = o.microsecMin;
+				}
+
+				if (dp_inst.settings.timeOnly || minDateTimeDate.getTime() === dp_date.getTime()) {
+					this._defaults.hourMin = minDateTime.getHours();
+					if (this.hour <= this._defaults.hourMin) {
+						this.hour = this._defaults.hourMin;
+						this._defaults.minuteMin = minDateTime.getMinutes();
+						if (this.minute <= this._defaults.minuteMin) {
+							this.minute = this._defaults.minuteMin;
+							this._defaults.secondMin = minDateTime.getSeconds();
+							if (this.second <= this._defaults.secondMin) {
+								this.second = this._defaults.secondMin;
+								this._defaults.millisecMin = minDateTime.getMilliseconds();
+								if (this.millisec <= this._defaults.millisecMin) {
+									this.millisec = this._defaults.millisecMin;
+									this._defaults.microsecMin = minDateTime.getMicroseconds();
+								} else {
+									if (this.microsec < this._defaults.microsecMin) {
+										this.microsec = this._defaults.microsecMin;
+									}
+									this._defaults.microsecMin = this.microsecMinOriginal;
+								}
+							} else {
+								this._defaults.millisecMin = this.millisecMinOriginal;
+								this._defaults.microsecMin = this.microsecMinOriginal;
+							}
+						} else {
+							this._defaults.secondMin = this.secondMinOriginal;
+							this._defaults.millisecMin = this.millisecMinOriginal;
+							this._defaults.microsecMin = this.microsecMinOriginal;
+						}
+					} else {
+						this._defaults.minuteMin = this.minuteMinOriginal;
+						this._defaults.secondMin = this.secondMinOriginal;
+						this._defaults.millisecMin = this.millisecMinOriginal;
+						this._defaults.microsecMin = this.microsecMinOriginal;
+					}
+				} else {
+					this._defaults.hourMin = this.hourMinOriginal;
+					this._defaults.minuteMin = this.minuteMinOriginal;
+					this._defaults.secondMin = this.secondMinOriginal;
+					this._defaults.millisecMin = this.millisecMinOriginal;
+					this._defaults.microsecMin = this.microsecMinOriginal;
+				}
+			}
+
+			if ($.datepicker._get(dp_inst, 'maxDateTime') !== null && $.datepicker._get(dp_inst, 'maxDateTime') !== undefined && dp_date) {
+				var maxDateTime = $.datepicker._get(dp_inst, 'maxDateTime'),
+					maxDateTimeDate = new Date(maxDateTime.getFullYear(), maxDateTime.getMonth(), maxDateTime.getDate(), 0, 0, 0, 0);
+
+				if (this.hourMaxOriginal === null || this.minuteMaxOriginal === null || this.secondMaxOriginal === null || this.millisecMaxOriginal === null) {
+					this.hourMaxOriginal = o.hourMax;
+					this.minuteMaxOriginal = o.minuteMax;
+					this.secondMaxOriginal = o.secondMax;
+					this.millisecMaxOriginal = o.millisecMax;
+					this.microsecMaxOriginal = o.microsecMax;
+				}
+
+				if (dp_inst.settings.timeOnly || maxDateTimeDate.getTime() === dp_date.getTime()) {
+					this._defaults.hourMax = maxDateTime.getHours();
+					if (this.hour >= this._defaults.hourMax) {
+						this.hour = this._defaults.hourMax;
+						this._defaults.minuteMax = maxDateTime.getMinutes();
+						if (this.minute >= this._defaults.minuteMax) {
+							this.minute = this._defaults.minuteMax;
+							this._defaults.secondMax = maxDateTime.getSeconds();
+							if (this.second >= this._defaults.secondMax) {
+								this.second = this._defaults.secondMax;
+								this._defaults.millisecMax = maxDateTime.getMilliseconds();
+								if (this.millisec >= this._defaults.millisecMax) {
+									this.millisec = this._defaults.millisecMax;
+									this._defaults.microsecMax = maxDateTime.getMicroseconds();
+								} else {
+									if (this.microsec > this._defaults.microsecMax) {
+										this.microsec = this._defaults.microsecMax;
+									}
+									this._defaults.microsecMax = this.microsecMaxOriginal;
+								}
+							} else {
+								this._defaults.millisecMax = this.millisecMaxOriginal;
+								this._defaults.microsecMax = this.microsecMaxOriginal;
+							}
+						} else {
+							this._defaults.secondMax = this.secondMaxOriginal;
+							this._defaults.millisecMax = this.millisecMaxOriginal;
+							this._defaults.microsecMax = this.microsecMaxOriginal;
+						}
+					} else {
+						this._defaults.minuteMax = this.minuteMaxOriginal;
+						this._defaults.secondMax = this.secondMaxOriginal;
+						this._defaults.millisecMax = this.millisecMaxOriginal;
+						this._defaults.microsecMax = this.microsecMaxOriginal;
+					}
+				} else {
+					this._defaults.hourMax = this.hourMaxOriginal;
+					this._defaults.minuteMax = this.minuteMaxOriginal;
+					this._defaults.secondMax = this.secondMaxOriginal;
+					this._defaults.millisecMax = this.millisecMaxOriginal;
+					this._defaults.microsecMax = this.microsecMaxOriginal;
+				}
+			}
+
+			if (dp_inst.settings.minTime!==null) {				
+				var tempMinTime=new Date("01/01/1970 " + dp_inst.settings.minTime);				
+				if (this.hour<tempMinTime.getHours()) {
+					this.hour=this._defaults.hourMin=tempMinTime.getHours();
+					this.minute=this._defaults.minuteMin=tempMinTime.getMinutes();							
+				} else if (this.hour===tempMinTime.getHours() && this.minute<tempMinTime.getMinutes()) {
+					this.minute=this._defaults.minuteMin=tempMinTime.getMinutes();
+				} else {						
+					if (this._defaults.hourMin<tempMinTime.getHours()) {
+						this._defaults.hourMin=tempMinTime.getHours();
+						this._defaults.minuteMin=tempMinTime.getMinutes();					
+					} else if (this._defaults.hourMin===tempMinTime.getHours()===this.hour && this._defaults.minuteMin<tempMinTime.getMinutes()) {
+						this._defaults.minuteMin=tempMinTime.getMinutes();						
+					} else {
+						this._defaults.minuteMin=0;
+					}
+				}				
+			}
+			
+			if (dp_inst.settings.maxTime!==null) {				
+				var tempMaxTime=new Date("01/01/1970 " + dp_inst.settings.maxTime);
+				if (this.hour>tempMaxTime.getHours()) {
+					this.hour=this._defaults.hourMax=tempMaxTime.getHours();						
+					this.minute=this._defaults.minuteMax=tempMaxTime.getMinutes();
+				} else if (this.hour===tempMaxTime.getHours() && this.minute>tempMaxTime.getMinutes()) {							
+					this.minute=this._defaults.minuteMax=tempMaxTime.getMinutes();						
+				} else {
+					if (this._defaults.hourMax>tempMaxTime.getHours()) {
+						this._defaults.hourMax=tempMaxTime.getHours();
+						this._defaults.minuteMax=tempMaxTime.getMinutes();					
+					} else if (this._defaults.hourMax===tempMaxTime.getHours()===this.hour && this._defaults.minuteMax>tempMaxTime.getMinutes()) {
+						this._defaults.minuteMax=tempMaxTime.getMinutes();						
+					} else {
+						this._defaults.minuteMax=59;
+					}
+				}						
+			}
+			
+			if (adjustSliders !== undefined && adjustSliders === true) {
+				var hourMax = parseInt((this._defaults.hourMax - ((this._defaults.hourMax - this._defaults.hourMin) % this._defaults.stepHour)), 10),
+					minMax = parseInt((this._defaults.minuteMax - ((this._defaults.minuteMax - this._defaults.minuteMin) % this._defaults.stepMinute)), 10),
+					secMax = parseInt((this._defaults.secondMax - ((this._defaults.secondMax - this._defaults.secondMin) % this._defaults.stepSecond)), 10),
+					millisecMax = parseInt((this._defaults.millisecMax - ((this._defaults.millisecMax - this._defaults.millisecMin) % this._defaults.stepMillisec)), 10),
+					microsecMax = parseInt((this._defaults.microsecMax - ((this._defaults.microsecMax - this._defaults.microsecMin) % this._defaults.stepMicrosec)), 10);
+
+				if (this.hour_slider) {
+					this.control.options(this, this.hour_slider, 'hour', { min: this._defaults.hourMin, max: hourMax, step: this._defaults.stepHour });
+					this.control.value(this, this.hour_slider, 'hour', this.hour - (this.hour % this._defaults.stepHour));
+				}
+				if (this.minute_slider) {
+					this.control.options(this, this.minute_slider, 'minute', { min: this._defaults.minuteMin, max: minMax, step: this._defaults.stepMinute });
+					this.control.value(this, this.minute_slider, 'minute', this.minute - (this.minute % this._defaults.stepMinute));
+				}
+				if (this.second_slider) {
+					this.control.options(this, this.second_slider, 'second', { min: this._defaults.secondMin, max: secMax, step: this._defaults.stepSecond });
+					this.control.value(this, this.second_slider, 'second', this.second - (this.second % this._defaults.stepSecond));
+				}
+				if (this.millisec_slider) {
+					this.control.options(this, this.millisec_slider, 'millisec', { min: this._defaults.millisecMin, max: millisecMax, step: this._defaults.stepMillisec });
+					this.control.value(this, this.millisec_slider, 'millisec', this.millisec - (this.millisec % this._defaults.stepMillisec));
+				}
+				if (this.microsec_slider) {
+					this.control.options(this, this.microsec_slider, 'microsec', { min: this._defaults.microsecMin, max: microsecMax, step: this._defaults.stepMicrosec });
+					this.control.value(this, this.microsec_slider, 'microsec', this.microsec - (this.microsec % this._defaults.stepMicrosec));
+				}
+			}
+
+		},
+
+		/*
+		* when a slider moves, set the internal time...
+		* on time change is also called when the time is updated in the text field
+		*/
+		_onTimeChange: function () {
+			if (!this._defaults.showTimepicker) {
+                                return;
+			}
+			var hour = (this.hour_slider) ? this.control.value(this, this.hour_slider, 'hour') : false,
+				minute = (this.minute_slider) ? this.control.value(this, this.minute_slider, 'minute') : false,
+				second = (this.second_slider) ? this.control.value(this, this.second_slider, 'second') : false,
+				millisec = (this.millisec_slider) ? this.control.value(this, this.millisec_slider, 'millisec') : false,
+				microsec = (this.microsec_slider) ? this.control.value(this, this.microsec_slider, 'microsec') : false,
+				timezone = (this.timezone_select) ? this.timezone_select.val() : false,
+				o = this._defaults,
+				pickerTimeFormat = o.pickerTimeFormat || o.timeFormat,
+				pickerTimeSuffix = o.pickerTimeSuffix || o.timeSuffix;
+
+			if (typeof(hour) === 'object') {
+				hour = false;
+			}
+			if (typeof(minute) === 'object') {
+				minute = false;
+			}
+			if (typeof(second) === 'object') {
+				second = false;
+			}
+			if (typeof(millisec) === 'object') {
+				millisec = false;
+			}
+			if (typeof(microsec) === 'object') {
+				microsec = false;
+			}
+			if (typeof(timezone) === 'object') {
+				timezone = false;
+			}
+
+			if (hour !== false) {
+				hour = parseInt(hour, 10);
+			}
+			if (minute !== false) {
+				minute = parseInt(minute, 10);
+			}
+			if (second !== false) {
+				second = parseInt(second, 10);
+			}
+			if (millisec !== false) {
+				millisec = parseInt(millisec, 10);
+			}
+			if (microsec !== false) {
+				microsec = parseInt(microsec, 10);
+			}
+			if (timezone !== false) {
+				timezone = timezone.toString();
+			}
+
+			var ampm = o[hour < 12 ? 'amNames' : 'pmNames'][0];
+
+			// If the update was done in the input field, the input field should not be updated.
+			// If the update was done using the sliders, update the input field.
+			var hasChanged = (
+						hour !== parseInt(this.hour,10) || // sliders should all be numeric
+						minute !== parseInt(this.minute,10) || 
+						second !== parseInt(this.second,10) || 
+						millisec !== parseInt(this.millisec,10) || 
+						microsec !== parseInt(this.microsec,10) || 
+						(this.ampm.length > 0 && (hour < 12) !== ($.inArray(this.ampm.toUpperCase(), this.amNames) !== -1)) || 
+						(this.timezone !== null && timezone !== this.timezone.toString()) // could be numeric or "EST" format, so use toString()
+					);
+
+			if (hasChanged) {
+
+				if (hour !== false) {
+					this.hour = hour;
+				}
+				if (minute !== false) {
+					this.minute = minute;
+				}
+				if (second !== false) {
+					this.second = second;
+				}
+				if (millisec !== false) {
+					this.millisec = millisec;
+				}
+				if (microsec !== false) {
+					this.microsec = microsec;
+				}
+				if (timezone !== false) {
+					this.timezone = timezone;
+				}
+
+				if (!this.inst) {
+					this.inst = $.datepicker._getInst(this.$input[0]);
+				}
+
+				this._limitMinMaxDateTime(this.inst, true);
+			}
+			if (this.support.ampm) {
+				this.ampm = ampm;
+			}
+
+			// Updates the time within the timepicker
+			this.formattedTime = $.datepicker.formatTime(o.timeFormat, this, o);
+			if (this.$timeObj) {
+				if (pickerTimeFormat === o.timeFormat) {
+					this.$timeObj.text(this.formattedTime + pickerTimeSuffix);
+				}
+				else {
+					this.$timeObj.text($.datepicker.formatTime(pickerTimeFormat, this, o) + pickerTimeSuffix);
+				}
+			}
+
+			this.timeDefined = true;
+			if (hasChanged) {
+				this._updateDateTime();
+				//this.$input.focus(); // may automatically open the picker on setDate
+			}
+		},
+
+		/*
+		* call custom onSelect.
+		* bind to sliders slidestop, and grid click.
+		*/
+		_onSelectHandler: function () {
+			var onSelect = this._defaults.onSelect || this.inst.settings.onSelect;
+			var inputEl = this.$input ? this.$input[0] : null;
+			if (onSelect && inputEl) {
+				onSelect.apply(inputEl, [this.formattedDateTime, this]);
+			}
+		},
+
+		/*
+		* update our input with the new date time..
+		*/
+		_updateDateTime: function (dp_inst) {
+			dp_inst = this.inst || dp_inst;
+			var dtTmp = (dp_inst.currentYear > 0? 
+							new Date(dp_inst.currentYear, dp_inst.currentMonth, dp_inst.currentDay) : 
+							new Date(dp_inst.selectedYear, dp_inst.selectedMonth, dp_inst.selectedDay)),
+				dt = $.datepicker._daylightSavingAdjust(dtTmp),
+				//dt = $.datepicker._daylightSavingAdjust(new Date(dp_inst.selectedYear, dp_inst.selectedMonth, dp_inst.selectedDay)),
+				//dt = $.datepicker._daylightSavingAdjust(new Date(dp_inst.currentYear, dp_inst.currentMonth, dp_inst.currentDay)),
+				dateFmt = $.datepicker._get(dp_inst, 'dateFormat'),
+				formatCfg = $.datepicker._getFormatConfig(dp_inst),
+				timeAvailable = dt !== null && this.timeDefined;
+			this.formattedDate = $.datepicker.formatDate(dateFmt, (dt === null ? new Date() : dt), formatCfg);
+			var formattedDateTime = this.formattedDate;
+			
+			// if a slider was changed but datepicker doesn't have a value yet, set it
+			if (dp_inst.lastVal === "") {
+                dp_inst.currentYear = dp_inst.selectedYear;
+                dp_inst.currentMonth = dp_inst.selectedMonth;
+                dp_inst.currentDay = dp_inst.selectedDay;
+            }
+
+			/*
+			* remove following lines to force every changes in date picker to change the input value
+			* Bug descriptions: when an input field has a default value, and click on the field to pop up the date picker. 
+			* If the user manually empty the value in the input field, the date picker will never change selected value.
+			*/
+			//if (dp_inst.lastVal !== undefined && (dp_inst.lastVal.length > 0 && this.$input.val().length === 0)) {
+			//	return;
+			//}
+
+			if (this._defaults.timeOnly === true && this._defaults.timeOnlyShowDate === false) {
+				formattedDateTime = this.formattedTime;
+			} else if ((this._defaults.timeOnly !== true && (this._defaults.alwaysSetTime || timeAvailable)) || (this._defaults.timeOnly === true && this._defaults.timeOnlyShowDate === true)) {
+				formattedDateTime += this._defaults.separator + this.formattedTime + this._defaults.timeSuffix;
+			}
+
+			this.formattedDateTime = formattedDateTime;
+
+			if (!this._defaults.showTimepicker) {
+				this.$input.val(this.formattedDate);
+			} else if (this.$altInput && this._defaults.timeOnly === false && this._defaults.altFieldTimeOnly === true) {
+				this.$altInput.val(this.formattedTime);
+				this.$input.val(this.formattedDate);
+			} else if (this.$altInput) {
+				this.$input.val(formattedDateTime);
+				var altFormattedDateTime = '',
+					altSeparator = this._defaults.altSeparator !== null ? this._defaults.altSeparator : this._defaults.separator,
+					altTimeSuffix = this._defaults.altTimeSuffix !== null ? this._defaults.altTimeSuffix : this._defaults.timeSuffix;
+				
+				if (!this._defaults.timeOnly) {
+					if (this._defaults.altFormat) {
+						altFormattedDateTime = $.datepicker.formatDate(this._defaults.altFormat, (dt === null ? new Date() : dt), formatCfg);
+					}
+					else {
+						altFormattedDateTime = this.formattedDate;
+					}
+
+					if (altFormattedDateTime) {
+						altFormattedDateTime += altSeparator;
+					}
+				}
+
+				if (this._defaults.altTimeFormat !== null) {
+					altFormattedDateTime += $.datepicker.formatTime(this._defaults.altTimeFormat, this, this._defaults) + altTimeSuffix;
+				}
+				else {
+					altFormattedDateTime += this.formattedTime + altTimeSuffix;
+				}
+				this.$altInput.val(altFormattedDateTime);
+			} else {
+				this.$input.val(formattedDateTime);
+			}
+
+			this.$input.trigger("change");
+		},
+
+		_onFocus: function () {
+			if (!this.$input.val() && this._defaults.defaultValue) {
+				this.$input.val(this._defaults.defaultValue);
+				var inst = $.datepicker._getInst(this.$input.get(0)),
+					tp_inst = $.datepicker._get(inst, 'timepicker');
+				if (tp_inst) {
+					if (tp_inst._defaults.timeOnly && (inst.input.val() !== inst.lastVal)) {
+						try {
+							$.datepicker._updateDatepicker(inst);
+						} catch (err) {
+							$.timepicker.log(err);
+						}
+					}
+				}
+			}
+		},
+
+		/*
+		* Small abstraction to control types
+		* We can add more, just be sure to follow the pattern: create, options, value
+		*/
+		_controls: {
+			// slider methods
+			slider: {
+				create: function (tp_inst, obj, unit, val, min, max, step) {
+					var rtl = tp_inst._defaults.isRTL; // if rtl go -60->0 instead of 0->60
+					return obj.prop('slide', null).slider({
+						orientation: "horizontal",
+						value: rtl ? val * -1 : val,
+						min: rtl ? max * -1 : min,
+						max: rtl ? min * -1 : max,
+						step: step,
+						slide: function (event, ui) {
+							tp_inst.control.value(tp_inst, $(this), unit, rtl ? ui.value * -1 : ui.value);
+							tp_inst._onTimeChange();
+						},
+						stop: function (event, ui) {
+							tp_inst._onSelectHandler();
+						}
+					});	
+				},
+				options: function (tp_inst, obj, unit, opts, val) {
+					if (tp_inst._defaults.isRTL) {
+						if (typeof(opts) === 'string') {
+							if (opts === 'min' || opts === 'max') {
+								if (val !== undefined) {
+									return obj.slider(opts, val * -1);
+								}
+								return Math.abs(obj.slider(opts));
+							}
+							return obj.slider(opts);
+						}
+						var min = opts.min, 
+							max = opts.max;
+						opts.min = opts.max = null;
+						if (min !== undefined) {
+							opts.max = min * -1;
+						}
+						if (max !== undefined) {
+							opts.min = max * -1;
+						}
+						return obj.slider(opts);
+					}
+					if (typeof(opts) === 'string' && val !== undefined) {
+						return obj.slider(opts, val);
+					}
+					return obj.slider(opts);
+				},
+				value: function (tp_inst, obj, unit, val) {
+					if (tp_inst._defaults.isRTL) {
+						if (val !== undefined) {
+							return obj.slider('value', val * -1);
+						}
+						return Math.abs(obj.slider('value'));
+					}
+					if (val !== undefined) {
+						return obj.slider('value', val);
+					}
+					return obj.slider('value');
+				}
+			},
+			// select methods
+			select: {
+				create: function (tp_inst, obj, unit, val, min, max, step) {
+					var sel = '<select class="ui-timepicker-select ui-state-default ui-corner-all" data-unit="' + unit + '" data-min="' + min + '" data-max="' + max + '" data-step="' + step + '">',
+						format = tp_inst._defaults.pickerTimeFormat || tp_inst._defaults.timeFormat;
+
+					for (var i = min; i <= max; i += step) {
+						sel += '<option value="' + i + '"' + (i === val ? ' selected' : '') + '>';
+						if (unit === 'hour') {
+							sel += $.datepicker.formatTime($.trim(format.replace(/[^ht ]/ig, '')), {hour: i}, tp_inst._defaults);
+						}
+						else if (unit === 'millisec' || unit === 'microsec' || i >= 10) { sel += i; }
+						else {sel += '0' + i.toString(); }
+						sel += '</option>';
+					}
+					sel += '</select>';
+
+					obj.children('select').remove();
+
+					$(sel).appendTo(obj).change(function (e) {
+						tp_inst._onTimeChange();
+						tp_inst._onSelectHandler();
+						tp_inst._afterInject();
+					});
+
+					return obj;
+				},
+				options: function (tp_inst, obj, unit, opts, val) {
+					var o = {},
+						$t = obj.children('select');
+					if (typeof(opts) === 'string') {
+						if (val === undefined) {
+							return $t.data(opts);
+						}
+						o[opts] = val;	
+					}
+					else { o = opts; }
+					return tp_inst.control.create(tp_inst, obj, $t.data('unit'), $t.val(), o.min>=0 ? o.min : $t.data('min'), o.max || $t.data('max'), o.step || $t.data('step'));
+				},
+				value: function (tp_inst, obj, unit, val) {
+					var $t = obj.children('select');
+					if (val !== undefined) {
+						return $t.val(val);
+					}
+					return $t.val();
+				}
+			}
+		} // end _controls
+
+	});
+
+	$.fn.extend({
+		/*
+		* shorthand just to use timepicker.
+		*/
+		timepicker: function (o) {
+			o = o || {};
+			var tmp_args = Array.prototype.slice.call(arguments);
+
+			if (typeof o === 'object') {
+				tmp_args[0] = $.extend(o, {
+					timeOnly: true
+				});
+			}
+
+			return $(this).each(function () {
+				$.fn.datetimepicker.apply($(this), tmp_args);
+			});
+		},
+
+		/*
+		* extend timepicker to datepicker
+		*/
+		datetimepicker: function (o) {
+			o = o || {};
+			var tmp_args = arguments;
+
+			if (typeof(o) === 'string') {
+				if (o === 'getDate'  || (o === 'option' && tmp_args.length === 2 && typeof (tmp_args[1]) === 'string')) {
+					return $.fn.datepicker.apply($(this[0]), tmp_args);
+				} else {
+					return this.each(function () {
+						var $t = $(this);
+						$t.datepicker.apply($t, tmp_args);
+					});
+				}
+			} else {
+				return this.each(function () {
+					var $t = $(this);
+					$t.datepicker($.timepicker._newInst($t, o)._defaults);
+				});
+			}
+		}
+	});
+
+	/*
+	* Public Utility to parse date and time
+	*/
+	$.datepicker.parseDateTime = function (dateFormat, timeFormat, dateTimeString, dateSettings, timeSettings) {
+		var parseRes = parseDateTimeInternal(dateFormat, timeFormat, dateTimeString, dateSettings, timeSettings);
+		if (parseRes.timeObj) {
+			var t = parseRes.timeObj;
+			parseRes.date.setHours(t.hour, t.minute, t.second, t.millisec);
+			parseRes.date.setMicroseconds(t.microsec);
+		}
+
+		return parseRes.date;
+	};
+
+	/*
+	* Public utility to parse time
+	*/
+	$.datepicker.parseTime = function (timeFormat, timeString, options) {
+		var o = extendRemove(extendRemove({}, $.timepicker._defaults), options || {}),
+			iso8601 = (timeFormat.replace(/\'.*?\'/g, '').indexOf('Z') !== -1);
+
+		// Strict parse requires the timeString to match the timeFormat exactly
+		var strictParse = function (f, s, o) {
+
+			// pattern for standard and localized AM/PM markers
+			var getPatternAmpm = function (amNames, pmNames) {
+				var markers = [];
+				if (amNames) {
+					$.merge(markers, amNames);
+				}
+				if (pmNames) {
+					$.merge(markers, pmNames);
+				}
+				markers = $.map(markers, function (val) {
+					return val.replace(/[.*+?|()\[\]{}\\]/g, '\\$&');
+				});
+				return '(' + markers.join('|') + ')?';
+			};
+
+			// figure out position of time elements.. cause js cant do named captures
+			var getFormatPositions = function (timeFormat) {
+				var finds = timeFormat.toLowerCase().match(/(h{1,2}|m{1,2}|s{1,2}|l{1}|c{1}|t{1,2}|z|'.*?')/g),
+					orders = {
+						h: -1,
+						m: -1,
+						s: -1,
+						l: -1,
+						c: -1,
+						t: -1,
+						z: -1
+					};
+
+				if (finds) {
+					for (var i = 0; i < finds.length; i++) {
+						if (orders[finds[i].toString().charAt(0)] === -1) {
+							orders[finds[i].toString().charAt(0)] = i + 1;
+						}
+					}
+				}
+				return orders;
+			};
+
+			var regstr = '^' + f.toString()
+					.replace(/([hH]{1,2}|mm?|ss?|[tT]{1,2}|[zZ]|[lc]|'.*?')/g, function (match) {
+							var ml = match.length;
+							switch (match.charAt(0).toLowerCase()) {
+							case 'h':
+								return ml === 1 ? '(\\d?\\d)' : '(\\d{' + ml + '})';
+							case 'm':
+								return ml === 1 ? '(\\d?\\d)' : '(\\d{' + ml + '})';
+							case 's':
+								return ml === 1 ? '(\\d?\\d)' : '(\\d{' + ml + '})';
+							case 'l':
+								return '(\\d?\\d?\\d)';
+							case 'c':
+								return '(\\d?\\d?\\d)';
+							case 'z':
+								return '(z|[-+]\\d\\d:?\\d\\d|\\S+)?';
+							case 't':
+								return getPatternAmpm(o.amNames, o.pmNames);
+							default:    // literal escaped in quotes
+								return '(' + match.replace(/\'/g, "").replace(/(\.|\$|\^|\\|\/|\(|\)|\[|\]|\?|\+|\*)/g, function (m) { return "\\" + m; }) + ')?';
+							}
+						})
+					.replace(/\s/g, '\\s?') +
+					o.timeSuffix + '$',
+				order = getFormatPositions(f),
+				ampm = '',
+				treg;
+
+			treg = s.match(new RegExp(regstr, 'i'));
+
+			var resTime = {
+				hour: 0,
+				minute: 0,
+				second: 0,
+				millisec: 0,
+				microsec: 0
+			};
+
+			if (treg) {
+				if (order.t !== -1) {
+					if (treg[order.t] === undefined || treg[order.t].length === 0) {
+						ampm = '';
+						resTime.ampm = '';
+					} else {
+						ampm = $.inArray(treg[order.t].toUpperCase(), $.map(o.amNames, function (x,i) { return x.toUpperCase(); })) !== -1 ? 'AM' : 'PM';
+						resTime.ampm = o[ampm === 'AM' ? 'amNames' : 'pmNames'][0];
+					}
+				}
+
+				if (order.h !== -1) {
+					if (ampm === 'AM' && treg[order.h] === '12') {
+						resTime.hour = 0; // 12am = 0 hour
+					} else {
+						if (ampm === 'PM' && treg[order.h] !== '12') {
+							resTime.hour = parseInt(treg[order.h], 10) + 12; // 12pm = 12 hour, any other pm = hour + 12
+						} else {
+							resTime.hour = Number(treg[order.h]);
+						}
+					}
+				}
+
+				if (order.m !== -1) {
+					resTime.minute = Number(treg[order.m]);
+				}
+				if (order.s !== -1) {
+					resTime.second = Number(treg[order.s]);
+				}
+				if (order.l !== -1) {
+					resTime.millisec = Number(treg[order.l]);
+				}
+				if (order.c !== -1) {
+					resTime.microsec = Number(treg[order.c]);
+				}
+				if (order.z !== -1 && treg[order.z] !== undefined) {
+					resTime.timezone = $.timepicker.timezoneOffsetNumber(treg[order.z]);
+				}
+
+
+				return resTime;
+			}
+			return false;
+		};// end strictParse
+
+		// First try JS Date, if that fails, use strictParse
+		var looseParse = function (f, s, o) {
+			try {
+				var d = new Date('2012-01-01 ' + s);
+				if (isNaN(d.getTime())) {
+					d = new Date('2012-01-01T' + s);
+					if (isNaN(d.getTime())) {
+						d = new Date('01/01/2012 ' + s);
+						if (isNaN(d.getTime())) {
+							throw "Unable to parse time with native Date: " + s;
+						}
+					}
+				}
+
+				return {
+					hour: d.getHours(),
+					minute: d.getMinutes(),
+					second: d.getSeconds(),
+					millisec: d.getMilliseconds(),
+					microsec: d.getMicroseconds(),
+					timezone: d.getTimezoneOffset() * -1
+				};
+			}
+			catch (err) {
+				try {
+					return strictParse(f, s, o);
+				}
+				catch (err2) {
+					$.timepicker.log("Unable to parse \ntimeString: " + s + "\ntimeFormat: " + f);
+				}				
+			}
+			return false;
+		}; // end looseParse
+		
+		if (typeof o.parse === "function") {
+			return o.parse(timeFormat, timeString, o);
+		}
+		if (o.parse === 'loose') {
+			return looseParse(timeFormat, timeString, o);
+		}
+		return strictParse(timeFormat, timeString, o);
+	};
+
+	/**
+	 * Public utility to format the time
+	 * @param {string} format format of the time
+	 * @param {Object} time Object not a Date for timezones
+	 * @param {Object} [options] essentially the regional[].. amNames, pmNames, ampm
+	 * @returns {string} the formatted time
+	 */
+	$.datepicker.formatTime = function (format, time, options) {
+		options = options || {};
+		options = $.extend({}, $.timepicker._defaults, options);
+		time = $.extend({
+			hour: 0,
+			minute: 0,
+			second: 0,
+			millisec: 0,
+			microsec: 0,
+			timezone: null
+		}, time);
+
+		var tmptime = format,
+			ampmName = options.amNames[0],
+			hour = parseInt(time.hour, 10);
+
+		if (hour > 11) {
+			ampmName = options.pmNames[0];
+		}
+
+		tmptime = tmptime.replace(/(?:HH?|hh?|mm?|ss?|[tT]{1,2}|[zZ]|[lc]|'.*?')/g, function (match) {
+			switch (match) {
+			case 'HH':
+				return ('0' + hour).slice(-2);
+			case 'H':
+				return hour;
+			case 'hh':
+				return ('0' + convert24to12(hour)).slice(-2);
+			case 'h':
+				return convert24to12(hour);
+			case 'mm':
+				return ('0' + time.minute).slice(-2);
+			case 'm':
+				return time.minute;
+			case 'ss':
+				return ('0' + time.second).slice(-2);
+			case 's':
+				return time.second;
+			case 'l':
+				return ('00' + time.millisec).slice(-3);
+			case 'c':
+				return ('00' + time.microsec).slice(-3);
+			case 'z':
+				return $.timepicker.timezoneOffsetString(time.timezone === null ? options.timezone : time.timezone, false);
+			case 'Z':
+				return $.timepicker.timezoneOffsetString(time.timezone === null ? options.timezone : time.timezone, true);
+			case 'T':
+				return ampmName.charAt(0).toUpperCase();
+			case 'TT':
+				return ampmName.toUpperCase();
+			case 't':
+				return ampmName.charAt(0).toLowerCase();
+			case 'tt':
+				return ampmName.toLowerCase();
+			default:
+				return match.replace(/'/g, "");
+			}
+		});
+
+		return tmptime;
+	};
+
+	/*
+	* the bad hack :/ override datepicker so it doesn't close on select
+	// inspired: http://stackoverflow.com/questions/1252512/jquery-datepicker-prevent-closing-picker-when-clicking-a-date/1762378#1762378
+	*/
+	$.datepicker._base_selectDate = $.datepicker._selectDate;
+	$.datepicker._selectDate = function (id, dateStr) {
+		var inst = this._getInst($(id)[0]),
+			tp_inst = this._get(inst, 'timepicker'),
+			was_inline;
+
+		if (tp_inst && inst.settings.showTimepicker) {
+			tp_inst._limitMinMaxDateTime(inst, true);
+			was_inline = inst.inline;
+			inst.inline = inst.stay_open = true;
+			//This way the onSelect handler called from calendarpicker get the full dateTime
+			this._base_selectDate(id, dateStr);
+			inst.inline = was_inline;
+			inst.stay_open = false;
+			this._notifyChange(inst);
+			this._updateDatepicker(inst);
+		} else {
+			this._base_selectDate(id, dateStr);
+		}
+	};
+
+	/*
+	* second bad hack :/ override datepicker so it triggers an event when changing the input field
+	* and does not redraw the datepicker on every selectDate event
+	*/
+	$.datepicker._base_updateDatepicker = $.datepicker._updateDatepicker;
+	$.datepicker._updateDatepicker = function (inst) {
+
+		// don't popup the datepicker if there is another instance already opened
+		var input = inst.input[0];
+		if ($.datepicker._curInst && $.datepicker._curInst !== inst && $.datepicker._datepickerShowing && $.datepicker._lastInput !== input) {
+			return;
+		}
+
+		if (typeof(inst.stay_open) !== 'boolean' || inst.stay_open === false) {
+
+			this._base_updateDatepicker(inst);
+
+			// Reload the time control when changing something in the input text field.
+			var tp_inst = this._get(inst, 'timepicker');
+			if (tp_inst) {
+				tp_inst._addTimePicker(inst);
+			}
+		}
+	};
+
+	/*
+	* third bad hack :/ override datepicker so it allows spaces and colon in the input field
+	*/
+	$.datepicker._base_doKeyPress = $.datepicker._doKeyPress;
+	$.datepicker._doKeyPress = function (event) {
+		var inst = $.datepicker._getInst(event.target),
+			tp_inst = $.datepicker._get(inst, 'timepicker');
+
+		if (tp_inst) {
+			if ($.datepicker._get(inst, 'constrainInput')) {
+				var ampm = tp_inst.support.ampm,
+					tz = tp_inst._defaults.showTimezone !== null ? tp_inst._defaults.showTimezone : tp_inst.support.timezone,
+					dateChars = $.datepicker._possibleChars($.datepicker._get(inst, 'dateFormat')),
+					datetimeChars = tp_inst._defaults.timeFormat.toString()
+											.replace(/[hms]/g, '')
+											.replace(/TT/g, ampm ? 'APM' : '')
+											.replace(/Tt/g, ampm ? 'AaPpMm' : '')
+											.replace(/tT/g, ampm ? 'AaPpMm' : '')
+											.replace(/T/g, ampm ? 'AP' : '')
+											.replace(/tt/g, ampm ? 'apm' : '')
+											.replace(/t/g, ampm ? 'ap' : '') + 
+											" " + tp_inst._defaults.separator + 
+											tp_inst._defaults.timeSuffix + 
+											(tz ? tp_inst._defaults.timezoneList.join('') : '') + 
+											(tp_inst._defaults.amNames.join('')) + (tp_inst._defaults.pmNames.join('')) + 
+											dateChars,
+					chr = String.fromCharCode(event.charCode === undefined ? event.keyCode : event.charCode);
+				return event.ctrlKey || (chr < ' ' || !dateChars || datetimeChars.indexOf(chr) > -1);
+			}
+		}
+
+		return $.datepicker._base_doKeyPress(event);
+	};
+
+	/*
+	* Fourth bad hack :/ override _updateAlternate function used in inline mode to init altField
+	* Update any alternate field to synchronise with the main field.
+	*/
+	$.datepicker._base_updateAlternate = $.datepicker._updateAlternate;
+	$.datepicker._updateAlternate = function (inst) {
+		var tp_inst = this._get(inst, 'timepicker');
+		if (tp_inst) {
+			var altField = tp_inst._defaults.altField;
+			if (altField) { // update alternate field too
+				var altFormat = tp_inst._defaults.altFormat || tp_inst._defaults.dateFormat,
+					date = this._getDate(inst),
+					formatCfg = $.datepicker._getFormatConfig(inst),
+					altFormattedDateTime = '', 
+					altSeparator = tp_inst._defaults.altSeparator ? tp_inst._defaults.altSeparator : tp_inst._defaults.separator, 
+					altTimeSuffix = tp_inst._defaults.altTimeSuffix ? tp_inst._defaults.altTimeSuffix : tp_inst._defaults.timeSuffix,
+					altTimeFormat = tp_inst._defaults.altTimeFormat !== null ? tp_inst._defaults.altTimeFormat : tp_inst._defaults.timeFormat;
+				
+				altFormattedDateTime += $.datepicker.formatTime(altTimeFormat, tp_inst, tp_inst._defaults) + altTimeSuffix;
+				if (!tp_inst._defaults.timeOnly && !tp_inst._defaults.altFieldTimeOnly && date !== null) {
+					if (tp_inst._defaults.altFormat) {
+						altFormattedDateTime = $.datepicker.formatDate(tp_inst._defaults.altFormat, date, formatCfg) + altSeparator + altFormattedDateTime;
+					}
+					else {
+						altFormattedDateTime = tp_inst.formattedDate + altSeparator + altFormattedDateTime;
+					}
+				}
+				$(altField).val( inst.input.val() ? altFormattedDateTime : "");
+			}
+		}
+		else {
+			$.datepicker._base_updateAlternate(inst);	
+		}
+	};
+
+	/*
+	* Override key up event to sync manual input changes.
+	*/
+	$.datepicker._base_doKeyUp = $.datepicker._doKeyUp;
+	$.datepicker._doKeyUp = function (event) {
+		var inst = $.datepicker._getInst(event.target),
+			tp_inst = $.datepicker._get(inst, 'timepicker');
+
+		if (tp_inst) {
+			if (tp_inst._defaults.timeOnly && (inst.input.val() !== inst.lastVal)) {
+				try {
+					$.datepicker._updateDatepicker(inst);
+				} catch (err) {
+					$.timepicker.log(err);
+				}
+			}
+		}
+
+		return $.datepicker._base_doKeyUp(event);
+	};
+
+	/*
+	* override "Today" button to also grab the time.
+	*/
+	$.datepicker._base_gotoToday = $.datepicker._gotoToday;
+	$.datepicker._gotoToday = function (id) {
+		var inst = this._getInst($(id)[0]),
+			$dp = inst.dpDiv;
+		var tp_inst = this._get(inst, 'timepicker');
+		selectLocalTimezone(tp_inst);
+		var now = new Date();
+		this._setTime(inst, now);
+		this._setDate(inst, now);
+		this._base_gotoToday(id);
+	};
+
+	/*
+	* Disable & enable the Time in the datetimepicker
+	*/
+	$.datepicker._disableTimepickerDatepicker = function (target) {
+		var inst = this._getInst(target);
+		if (!inst) {
+			return;
+		}
+
+		var tp_inst = this._get(inst, 'timepicker');
+		$(target).datepicker('getDate'); // Init selected[Year|Month|Day]
+		if (tp_inst) {
+			inst.settings.showTimepicker = false;
+			tp_inst._defaults.showTimepicker = false;
+			tp_inst._updateDateTime(inst);
+		}
+	};
+
+	$.datepicker._enableTimepickerDatepicker = function (target) {
+		var inst = this._getInst(target);
+		if (!inst) {
+			return;
+		}
+
+		var tp_inst = this._get(inst, 'timepicker');
+		$(target).datepicker('getDate'); // Init selected[Year|Month|Day]
+		if (tp_inst) {
+			inst.settings.showTimepicker = true;
+			tp_inst._defaults.showTimepicker = true;
+			tp_inst._addTimePicker(inst); // Could be disabled on page load
+			tp_inst._updateDateTime(inst);
+		}
+	};
+
+	/*
+	* Create our own set time function
+	*/
+	$.datepicker._setTime = function (inst, date) {
+		var tp_inst = this._get(inst, 'timepicker');
+		if (tp_inst) {
+			var defaults = tp_inst._defaults;
+
+			// calling _setTime with no date sets time to defaults
+			tp_inst.hour = date ? date.getHours() : defaults.hour;
+			tp_inst.minute = date ? date.getMinutes() : defaults.minute;
+			tp_inst.second = date ? date.getSeconds() : defaults.second;
+			tp_inst.millisec = date ? date.getMilliseconds() : defaults.millisec;
+			tp_inst.microsec = date ? date.getMicroseconds() : defaults.microsec;
+
+			//check if within min/max times.. 
+			tp_inst._limitMinMaxDateTime(inst, true);
+
+			tp_inst._onTimeChange();
+			tp_inst._updateDateTime(inst);
+		}
+	};
+
+	/*
+	* Create new public method to set only time, callable as $().datepicker('setTime', date)
+	*/
+	$.datepicker._setTimeDatepicker = function (target, date, withDate) {
+		var inst = this._getInst(target);
+		if (!inst) {
+			return;
+		}
+
+		var tp_inst = this._get(inst, 'timepicker');
+
+		if (tp_inst) {
+			this._setDateFromField(inst);
+			var tp_date;
+			if (date) {
+				if (typeof date === "string") {
+					tp_inst._parseTime(date, withDate);
+					tp_date = new Date();
+					tp_date.setHours(tp_inst.hour, tp_inst.minute, tp_inst.second, tp_inst.millisec);
+					tp_date.setMicroseconds(tp_inst.microsec);
+				} else {
+					tp_date = new Date(date.getTime());
+					tp_date.setMicroseconds(date.getMicroseconds());
+				}
+				if (tp_date.toString() === 'Invalid Date') {
+					tp_date = undefined;
+				}
+				this._setTime(inst, tp_date);
+			}
+		}
+
+	};
+
+	/*
+	* override setDate() to allow setting time too within Date object
+	*/
+	$.datepicker._base_setDateDatepicker = $.datepicker._setDateDatepicker;
+	$.datepicker._setDateDatepicker = function (target, _date) {
+		var inst = this._getInst(target);
+		var date = _date;
+		if (!inst) {
+			return;
+		}
+
+		if (typeof(_date) === 'string') {
+			date = new Date(_date);
+			if (!date.getTime()) {
+				this._base_setDateDatepicker.apply(this, arguments);
+				date = $(target).datepicker('getDate');
+			}
+		}
+
+		var tp_inst = this._get(inst, 'timepicker');
+		var tp_date;
+		if (date instanceof Date) {
+			tp_date = new Date(date.getTime());
+			tp_date.setMicroseconds(date.getMicroseconds());
+		} else {
+			tp_date = date;
+		}
+		
+		// This is important if you are using the timezone option, javascript's Date 
+		// object will only return the timezone offset for the current locale, so we 
+		// adjust it accordingly.  If not using timezone option this won't matter..
+		// If a timezone is different in tp, keep the timezone as is
+		if (tp_inst && tp_date) {
+			// look out for DST if tz wasn't specified
+			if (!tp_inst.support.timezone && tp_inst._defaults.timezone === null) {
+				tp_inst.timezone = tp_date.getTimezoneOffset() * -1;
+			}
+			date = $.timepicker.timezoneAdjust(date, tp_inst.timezone);
+			tp_date = $.timepicker.timezoneAdjust(tp_date, tp_inst.timezone);
+		}
+
+		this._updateDatepicker(inst);
+		this._base_setDateDatepicker.apply(this, arguments);
+		this._setTimeDatepicker(target, tp_date, true);
+	};
+
+	/*
+	* override getDate() to allow getting time too within Date object
+	*/
+	$.datepicker._base_getDateDatepicker = $.datepicker._getDateDatepicker;
+	$.datepicker._getDateDatepicker = function (target, noDefault) {
+		var inst = this._getInst(target);
+		if (!inst) {
+			return;
+		}
+
+		var tp_inst = this._get(inst, 'timepicker');
+
+		if (tp_inst) {
+			// if it hasn't yet been defined, grab from field
+			if (inst.lastVal === undefined) {
+				this._setDateFromField(inst, noDefault);
+			}
+
+			var date = this._getDate(inst);
+			var currDT = $.trim((tp_inst.$altInput && tp_inst._defaults.altFieldTimeOnly) ? tp_inst.$input.val() + ' ' + tp_inst.$altInput.val() : tp_inst.$input.val());
+			if (date && tp_inst._parseTime(currDT, !inst.settings.timeOnly)) {
+				date.setHours(tp_inst.hour, tp_inst.minute, tp_inst.second, tp_inst.millisec);
+				date.setMicroseconds(tp_inst.microsec);
+
+				// This is important if you are using the timezone option, javascript's Date 
+				// object will only return the timezone offset for the current locale, so we 
+				// adjust it accordingly.  If not using timezone option this won't matter..
+				if (tp_inst.timezone != null) {
+					// look out for DST if tz wasn't specified
+					if (!tp_inst.support.timezone && tp_inst._defaults.timezone === null) {
+						tp_inst.timezone = date.getTimezoneOffset() * -1;
+					}
+					date = $.timepicker.timezoneAdjust(date, tp_inst.timezone);
+				}
+			}
+			return date;
+		}
+		return this._base_getDateDatepicker(target, noDefault);
+	};
+
+	/*
+	* override parseDate() because UI 1.8.14 throws an error about "Extra characters"
+	* An option in datapicker to ignore extra format characters would be nicer.
+	*/
+	$.datepicker._base_parseDate = $.datepicker.parseDate;
+	$.datepicker.parseDate = function (format, value, settings) {
+		var date;
+		try {
+			date = this._base_parseDate(format, value, settings);
+		} catch (err) {
+			// Hack!  The error message ends with a colon, a space, and
+			// the "extra" characters.  We rely on that instead of
+			// attempting to perfectly reproduce the parsing algorithm.
+			if (err.indexOf(":") >= 0) {
+				date = this._base_parseDate(format, value.substring(0, value.length - (err.length - err.indexOf(':') - 2)), settings);
+				$.timepicker.log("Error parsing the date string: " + err + "\ndate string = " + value + "\ndate format = " + format);
+			} else {
+				throw err;
+			}
+		}
+		return date;
+	};
+
+	/*
+	* override formatDate to set date with time to the input
+	*/
+	$.datepicker._base_formatDate = $.datepicker._formatDate;
+	$.datepicker._formatDate = function (inst, day, month, year) {
+		var tp_inst = this._get(inst, 'timepicker');
+		if (tp_inst) {
+			tp_inst._updateDateTime(inst);
+			return tp_inst.$input.val();
+		}
+		return this._base_formatDate(inst);
+	};
+
+	/*
+	* override options setter to add time to maxDate(Time) and minDate(Time). MaxDate
+	*/
+	$.datepicker._base_optionDatepicker = $.datepicker._optionDatepicker;
+	$.datepicker._optionDatepicker = function (target, name, value) {
+		var inst = this._getInst(target),
+			name_clone;
+		if (!inst) {
+			return null;
+		}
+
+		var tp_inst = this._get(inst, 'timepicker');
+		if (tp_inst) {
+			var min = null,
+				max = null,
+				onselect = null,
+				overrides = tp_inst._defaults.evnts,
+				fns = {},
+				prop,
+				ret,
+				oldVal,
+				$target;
+			if (typeof name === 'string') { // if min/max was set with the string
+				if (name === 'minDate' || name === 'minDateTime') {
+					min = value;
+				} else if (name === 'maxDate' || name === 'maxDateTime') {
+					max = value;
+				} else if (name === 'onSelect') {
+					onselect = value;
+				} else if (overrides.hasOwnProperty(name)) {
+					if (typeof (value) === 'undefined') {
+						return overrides[name];
+					}
+					fns[name] = value;
+					name_clone = {}; //empty results in exiting function after overrides updated
+				}
+			} else if (typeof name === 'object') { //if min/max was set with the JSON
+				if (name.minDate) {
+					min = name.minDate;
+				} else if (name.minDateTime) {
+					min = name.minDateTime;
+				} else if (name.maxDate) {
+					max = name.maxDate;
+				} else if (name.maxDateTime) {
+					max = name.maxDateTime;
+				}
+				for (prop in overrides) {
+					if (overrides.hasOwnProperty(prop) && name[prop]) {
+						fns[prop] = name[prop];
+					}
+				}
+			}
+			for (prop in fns) {
+				if (fns.hasOwnProperty(prop)) {
+					overrides[prop] = fns[prop];
+					if (!name_clone) { name_clone = $.extend({}, name); }
+					delete name_clone[prop];
+				}
+			}
+			if (name_clone && isEmptyObject(name_clone)) { return; }
+			if (min) { //if min was set
+				if (min === 0) {
+					min = new Date();
+				} else {
+					min = new Date(min);
+				}
+				tp_inst._defaults.minDate = min;
+				tp_inst._defaults.minDateTime = min;
+			} else if (max) { //if max was set
+				if (max === 0) {
+					max = new Date();
+				} else {
+					max = new Date(max);
+				}
+				tp_inst._defaults.maxDate = max;
+				tp_inst._defaults.maxDateTime = max;
+			} else if (onselect) {
+				tp_inst._defaults.onSelect = onselect;
+			}
+
+			// Datepicker will override our date when we call _base_optionDatepicker when 
+			// calling minDate/maxDate, so we will first grab the value, call 
+			// _base_optionDatepicker, then set our value back.
+			if(min || max){
+				$target = $(target);
+				oldVal = $target.datetimepicker('getDate');
+				ret = this._base_optionDatepicker.call($.datepicker, target, name_clone || name, value);
+				$target.datetimepicker('setDate', oldVal);
+				return ret;
+			}
+		}
+		if (value === undefined) {
+			return this._base_optionDatepicker.call($.datepicker, target, name);
+		}
+		return this._base_optionDatepicker.call($.datepicker, target, name_clone || name, value);
+	};
+	
+	/*
+	* jQuery isEmptyObject does not check hasOwnProperty - if someone has added to the object prototype,
+	* it will return false for all objects
+	*/
+	var isEmptyObject = function (obj) {
+		var prop;
+		for (prop in obj) {
+			if (obj.hasOwnProperty(prop)) {
+				return false;
+			}
+		}
+		return true;
+	};
+
+	/*
+	* jQuery extend now ignores nulls!
+	*/
+	var extendRemove = function (target, props) {
+		$.extend(target, props);
+		for (var name in props) {
+			if (props[name] === null || props[name] === undefined) {
+				target[name] = props[name];
+			}
+		}
+		return target;
+	};
+
+	/*
+	* Determine by the time format which units are supported
+	* Returns an object of booleans for each unit
+	*/
+	var detectSupport = function (timeFormat) {
+		var tf = timeFormat.replace(/'.*?'/g, '').toLowerCase(), // removes literals
+			isIn = function (f, t) { // does the format contain the token?
+					return f.indexOf(t) !== -1 ? true : false;
+				};
+		return {
+				hour: isIn(tf, 'h'),
+				minute: isIn(tf, 'm'),
+				second: isIn(tf, 's'),
+				millisec: isIn(tf, 'l'),
+				microsec: isIn(tf, 'c'),
+				timezone: isIn(tf, 'z'),
+				ampm: isIn(tf, 't') && isIn(timeFormat, 'h'),
+				iso8601: isIn(timeFormat, 'Z')
+			};
+	};
+
+	/*
+	* Converts 24 hour format into 12 hour
+	* Returns 12 hour without leading 0
+	*/
+	var convert24to12 = function (hour) {
+		hour %= 12;
+
+		if (hour === 0) {
+			hour = 12;
+		}
+
+		return String(hour);
+	};
+
+	var computeEffectiveSetting = function (settings, property) {
+		return settings && settings[property] ? settings[property] : $.timepicker._defaults[property];
+	};
+
+	/*
+	* Splits datetime string into date and time substrings.
+	* Throws exception when date can't be parsed
+	* Returns {dateString: dateString, timeString: timeString}
+	*/
+	var splitDateTime = function (dateTimeString, timeSettings) {
+		// The idea is to get the number separator occurrences in datetime and the time format requested (since time has
+		// fewer unknowns, mostly numbers and am/pm). We will use the time pattern to split.
+		var separator = computeEffectiveSetting(timeSettings, 'separator'),
+			format = computeEffectiveSetting(timeSettings, 'timeFormat'),
+			timeParts = format.split(separator), // how many occurrences of separator may be in our format?
+			timePartsLen = timeParts.length,
+			allParts = dateTimeString.split(separator),
+			allPartsLen = allParts.length;
+
+		if (allPartsLen > 1) {
+			return {
+				dateString: allParts.splice(0, allPartsLen - timePartsLen).join(separator),
+				timeString: allParts.splice(0, timePartsLen).join(separator)
+			};
+		}
+
+		return {
+			dateString: dateTimeString,
+			timeString: ''
+		};
+	};
+
+	/*
+	* Internal function to parse datetime interval
+	* Returns: {date: Date, timeObj: Object}, where
+	*   date - parsed date without time (type Date)
+	*   timeObj = {hour: , minute: , second: , millisec: , microsec: } - parsed time. Optional
+	*/
+	var parseDateTimeInternal = function (dateFormat, timeFormat, dateTimeString, dateSettings, timeSettings) {
+		var date,
+			parts,
+			parsedTime;
+
+		parts = splitDateTime(dateTimeString, timeSettings);
+		date = $.datepicker._base_parseDate(dateFormat, parts.dateString, dateSettings);
+
+		if (parts.timeString === '') {
+			return {
+				date: date
+			};
+		}
+
+		parsedTime = $.datepicker.parseTime(timeFormat, parts.timeString, timeSettings);
+
+		if (!parsedTime) {
+			throw 'Wrong time format';
+		}
+
+		return {
+			date: date,
+			timeObj: parsedTime
+		};
+	};
+
+	/*
+	* Internal function to set timezone_select to the local timezone
+	*/
+	var selectLocalTimezone = function (tp_inst, date) {
+		if (tp_inst && tp_inst.timezone_select) {
+			var now = date || new Date();
+			tp_inst.timezone_select.val(-now.getTimezoneOffset());
+		}
+	};
+
+	/*
+	* Create a Singleton Instance
+	*/
+	$.timepicker = new Timepicker();
+
+	/**
+	 * Get the timezone offset as string from a date object (eg '+0530' for UTC+5.5)
+	 * @param {number} tzMinutes if not a number, less than -720 (-1200), or greater than 840 (+1400) this value is returned
+	 * @param {boolean} iso8601 if true formats in accordance to iso8601 "+12:45"
+	 * @return {string}
+	 */
+	$.timepicker.timezoneOffsetString = function (tzMinutes, iso8601) {
+		if (isNaN(tzMinutes) || tzMinutes > 840 || tzMinutes < -720) {
+			return tzMinutes;
+		}
+
+		var off = tzMinutes,
+			minutes = off % 60,
+			hours = (off - minutes) / 60,
+			iso = iso8601 ? ':' : '',
+			tz = (off >= 0 ? '+' : '-') + ('0' + Math.abs(hours)).slice(-2) + iso + ('0' + Math.abs(minutes)).slice(-2);
+		
+		if (tz === '+00:00') {
+			return 'Z';
+		}
+		return tz;
+	};
+
+	/**
+	 * Get the number in minutes that represents a timezone string
+	 * @param  {string} tzString formatted like "+0500", "-1245", "Z"
+	 * @return {number} the offset minutes or the original string if it doesn't match expectations
+	 */
+	$.timepicker.timezoneOffsetNumber = function (tzString) {
+		var normalized = tzString.toString().replace(':', ''); // excuse any iso8601, end up with "+1245"
+
+		if (normalized.toUpperCase() === 'Z') { // if iso8601 with Z, its 0 minute offset
+			return 0;
+		}
+
+		if (!/^(\-|\+)\d{4}$/.test(normalized)) { // possibly a user defined tz, so just give it back
+			return tzString;
+		}
+
+		return ((normalized.substr(0, 1) === '-' ? -1 : 1) * // plus or minus
+					((parseInt(normalized.substr(1, 2), 10) * 60) + // hours (converted to minutes)
+					parseInt(normalized.substr(3, 2), 10))); // minutes
+	};
+
+	/**
+	 * No way to set timezone in js Date, so we must adjust the minutes to compensate. (think setDate, getDate)
+	 * @param  {Date} date
+	 * @param  {string} toTimezone formatted like "+0500", "-1245"
+	 * @return {Date}
+	 */
+	$.timepicker.timezoneAdjust = function (date, toTimezone) {
+		var toTz = $.timepicker.timezoneOffsetNumber(toTimezone);
+		if (!isNaN(toTz)) {
+			date.setMinutes(date.getMinutes() + -date.getTimezoneOffset() - toTz);
+		}
+		return date;
+	};
+
+	/**
+	 * Calls `timepicker()` on the `startTime` and `endTime` elements, and configures them to
+	 * enforce date range limits.
+	 * n.b. The input value must be correctly formatted (reformatting is not supported)
+	 * @param  {Element} startTime
+	 * @param  {Element} endTime
+	 * @param  {Object} options Options for the timepicker() call
+	 * @return {jQuery}
+	 */
+	$.timepicker.timeRange = function (startTime, endTime, options) {
+		return $.timepicker.handleRange('timepicker', startTime, endTime, options);
+	};
+
+	/**
+	 * Calls `datetimepicker` on the `startTime` and `endTime` elements, and configures them to
+	 * enforce date range limits.
+	 * @param  {Element} startTime
+	 * @param  {Element} endTime
+	 * @param  {Object} options Options for the `timepicker()` call. Also supports `reformat`,
+	 *   a boolean value that can be used to reformat the input values to the `dateFormat`.
+	 * @param  {string} method Can be used to specify the type of picker to be added
+	 * @return {jQuery}
+	 */
+	$.timepicker.datetimeRange = function (startTime, endTime, options) {
+		$.timepicker.handleRange('datetimepicker', startTime, endTime, options);
+	};
+
+	/**
+	 * Calls `datepicker` on the `startTime` and `endTime` elements, and configures them to
+	 * enforce date range limits.
+	 * @param  {Element} startTime
+	 * @param  {Element} endTime
+	 * @param  {Object} options Options for the `timepicker()` call. Also supports `reformat`,
+	 *   a boolean value that can be used to reformat the input values to the `dateFormat`.
+	 * @return {jQuery}
+	 */
+	$.timepicker.dateRange = function (startTime, endTime, options) {
+		$.timepicker.handleRange('datepicker', startTime, endTime, options);
+	};
+
+	/**
+	 * Calls `method` on the `startTime` and `endTime` elements, and configures them to
+	 * enforce date range limits.
+	 * @param  {string} method Can be used to specify the type of picker to be added
+	 * @param  {Element} startTime
+	 * @param  {Element} endTime
+	 * @param  {Object} options Options for the `timepicker()` call. Also supports `reformat`,
+	 *   a boolean value that can be used to reformat the input values to the `dateFormat`.
+	 * @return {jQuery}
+	 */
+	$.timepicker.handleRange = function (method, startTime, endTime, options) {
+		options = $.extend({}, {
+			minInterval: 0, // min allowed interval in milliseconds
+			maxInterval: 0, // max allowed interval in milliseconds
+			start: {},      // options for start picker
+			end: {}         // options for end picker
+		}, options);
+
+		// for the mean time this fixes an issue with calling getDate with timepicker()
+		var timeOnly = false;
+		if(method === 'timepicker'){
+			timeOnly = true;
+			method = 'datetimepicker';
+		}
+
+		function checkDates(changed, other) {
+			var startdt = startTime[method]('getDate'),
+				enddt = endTime[method]('getDate'),
+				changeddt = changed[method]('getDate');
+
+			if (startdt !== null) {
+				var minDate = new Date(startdt.getTime()),
+					maxDate = new Date(startdt.getTime());
+
+				minDate.setMilliseconds(minDate.getMilliseconds() + options.minInterval);
+				maxDate.setMilliseconds(maxDate.getMilliseconds() + options.maxInterval);
+
+				if (options.minInterval > 0 && minDate > enddt) { // minInterval check
+					endTime[method]('setDate', minDate);
+				}
+				else if (options.maxInterval > 0 && maxDate < enddt) { // max interval check
+					endTime[method]('setDate', maxDate);
+				}
+				else if (startdt > enddt) {
+					other[method]('setDate', changeddt);
+				}
+			}
+		}
+
+		function selected(changed, other, option) {
+			if (!changed.val()) {
+				return;
+			}
+			var date = changed[method].call(changed, 'getDate');
+			if (date !== null && options.minInterval > 0) {
+				if (option === 'minDate') {
+					date.setMilliseconds(date.getMilliseconds() + options.minInterval);
+				}
+				if (option === 'maxDate') {
+					date.setMilliseconds(date.getMilliseconds() - options.minInterval);
+				}
+			}
+			
+			if (date.getTime) {
+				other[method].call(other, 'option', option, date);
+			}
+		}
+
+		$.fn[method].call(startTime, $.extend({
+			timeOnly: timeOnly,
+			onClose: function (dateText, inst) {
+				checkDates($(this), endTime);
+			},
+			onSelect: function (selectedDateTime) {
+				selected($(this), endTime, 'minDate');
+			}
+		}, options, options.start));
+		$.fn[method].call(endTime, $.extend({
+			timeOnly: timeOnly,
+			onClose: function (dateText, inst) {
+				checkDates($(this), startTime);
+			},
+			onSelect: function (selectedDateTime) {
+				selected($(this), startTime, 'maxDate');
+			}
+		}, options, options.end));
+
+		checkDates(startTime, endTime);
+		
+		selected(startTime, endTime, 'minDate');
+		selected(endTime, startTime, 'maxDate');
+
+		return $([startTime.get(0), endTime.get(0)]);
+	};
+
+	/**
+	 * Log error or data to the console during error or debugging
+	 * @param  {Object} err pass any type object to log to the console during error or debugging
+	 * @return {void}
+	 */
+	$.timepicker.log = function () {
+		if (window.console) {
+			window.console.log.apply(window.console, Array.prototype.slice.call(arguments));
+		}
+	};
+
+	/*
+	 * Add util object to allow access to private methods for testability.
+	 */
+	$.timepicker._util = {
+		_extendRemove: extendRemove,
+		_isEmptyObject: isEmptyObject,
+		_convert24to12: convert24to12,
+		_detectSupport: detectSupport,
+		_selectLocalTimezone: selectLocalTimezone,
+		_computeEffectiveSetting: computeEffectiveSetting,
+		_splitDateTime: splitDateTime,
+		_parseDateTimeInternal: parseDateTimeInternal
+	};
+
+	/*
+	* Microsecond support
+	*/
+	if (!Date.prototype.getMicroseconds) {
+		Date.prototype.microseconds = 0;
+		Date.prototype.getMicroseconds = function () { return this.microseconds; };
+		Date.prototype.setMicroseconds = function (m) {
+			this.setMilliseconds(this.getMilliseconds() + Math.floor(m / 1000));
+			this.microseconds = m % 1000;
+			return this;
+		};
+	}
+
+	/*
+	* Keep up with the version
+	*/
+	$.timepicker.version = "1.5.3";
+
+}));
+
+/*! jQuery Timepicker Addon - v1.5.5 - 2015-05-24
+* http://trentrichardson.com/examples/timepicker
+* Copyright (c) 2015 Trent Richardson; Licensed MIT */
+
+(function($){
+
+// source: src/i18n/jquery-ui-timepicker-af.js
+/* Afrikaans translation for the jQuery Timepicker Addon */
+/* Written by Deon Heyns */
+
+	$.timepicker.regional['af'] = {
+		timeOnlyTitle: 'Kies Tyd',
+		timeText: 'Tyd ',
+		hourText: 'Ure ',
+		minuteText: 'Minute',
+		secondText: 'Sekondes',
+		millisecText: 'Millisekondes',
+		microsecText: 'Mikrosekondes',
+		timezoneText: 'Tydsone',
+		currentText: 'Huidige Tyd',
+		closeText: 'Klaar',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-am.js
+/* Armenian translation for the jQuery Timepicker Addon */
+/* Written by Artavazd Avetisyan artavazda@hotmail.com */
+
+	$.timepicker.regional['am'] = {
+		timeOnlyTitle: 'Ընտրեք ժամանակը',
+		timeText: 'Ժամանակը',
+		hourText: 'Ժամ',
+		minuteText: 'Րոպե',
+		secondText: 'Վարկյան',
+		millisecText: 'Միլիվարկյան',
+		microsecText: 'Միկրովարկյան',
+		timezoneText: 'Ժամային գոտին',
+		currentText: 'Այժմ',
+		closeText: 'Փակել',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-bg.js
+/* Bulgarian translation for the jQuery Timepicker Addon */
+/* Written by Plamen Kovandjiev */
+
+	$.timepicker.regional['bg'] = {
+		timeOnlyTitle: 'Изберете време',
+		timeText: 'Време',
+		hourText: 'Час',
+		minuteText: 'Минути',
+		secondText: 'Секунди',
+		millisecText: 'Милисекунди',
+		microsecText: 'Микросекунди',
+		timezoneText: 'Часови пояс',
+		currentText: 'Сега',
+		closeText: 'Затвори',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-ca.js
+/* Catalan translation for the jQuery Timepicker Addon */
+/* Written by Sergi Faber */
+
+	$.timepicker.regional['ca'] = {
+		timeOnlyTitle: 'Escollir una hora',
+		timeText: 'Hora',
+		hourText: 'Hores',
+		minuteText: 'Minuts',
+		secondText: 'Segons',
+		millisecText: 'Milisegons',
+		microsecText: 'Microsegons',
+		timezoneText: 'Fus horari',
+		currentText: 'Ara',
+		closeText: 'Tancar',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-cs.js
+/* Czech translation for the jQuery Timepicker Addon */
+/* Written by Ondřej Vodáček */
+
+	$.timepicker.regional['cs'] = {
+		timeOnlyTitle: 'Vyberte čas',
+		timeText: 'Čas',
+		hourText: 'Hodiny',
+		minuteText: 'Minuty',
+		secondText: 'Vteřiny',
+		millisecText: 'Milisekundy',
+		microsecText: 'Mikrosekundy',
+		timezoneText: 'Časové pásmo',
+		currentText: 'Nyní',
+		closeText: 'Zavřít',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['dop.', 'AM', 'A'],
+		pmNames: ['odp.', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-da.js
+/* Danish translation for the jQuery Timepicker Addon */
+/* Written by Lars H. Jensen (http://www.larshj.dk) */
+
+    $.timepicker.regional['da'] = {
+        timeOnlyTitle: 'Vælg tid',
+        timeText: 'Tid',
+        hourText: 'Time',
+        minuteText: 'Minut',
+        secondText: 'Sekund',
+        millisecText: 'Millisekund',
+        microsecText: 'Mikrosekund',
+        timezoneText: 'Tidszone',
+        currentText: 'Nu',
+        closeText: 'Luk',
+        timeFormat: 'HH:mm',
+        timeSuffix: '',
+        amNames: ['am', 'AM', 'A'],
+        pmNames: ['pm', 'PM', 'P'],
+        isRTL: false
+    };
+
+// source: src/i18n/jquery-ui-timepicker-de.js
+/* German translation for the jQuery Timepicker Addon */
+/* Written by Marvin */
+
+	$.timepicker.regional['de'] = {
+		timeOnlyTitle: 'Zeit wählen',
+		timeText: 'Zeit',
+		hourText: 'Stunde',
+		minuteText: 'Minute',
+		secondText: 'Sekunde',
+		millisecText: 'Millisekunde',
+		microsecText: 'Mikrosekunde',
+		timezoneText: 'Zeitzone',
+		currentText: 'Jetzt',
+		closeText: 'Fertig',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['vorm.', 'AM', 'A'],
+		pmNames: ['nachm.', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-el.js
+/* Hellenic translation for the jQuery Timepicker Addon */
+/* Written by Christos Pontikis */
+
+	$.timepicker.regional['el'] = {
+		timeOnlyTitle: 'Επιλογή ώρας',
+		timeText: 'Ώρα',
+		hourText: 'Ώρες',
+		minuteText: 'Λεπτά',
+		secondText: 'Δευτερόλεπτα',
+		millisecText: 'μιλιδευτερόλεπτο',
+		microsecText: 'Microseconds',
+		timezoneText: 'Ζώνη ώρας',
+		currentText: 'Τώρα',
+		closeText: 'Κλείσιμο',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['π.μ.', 'AM', 'A'],
+		pmNames: ['μ.μ.', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-es.js
+/* Spanish translation for the jQuery Timepicker Addon */
+/* Written by Ianaré Sévi */
+/* Modified by Carlos Martínez */
+
+	$.timepicker.regional['es'] = {
+		timeOnlyTitle: 'Elegir una hora',
+		timeText: 'Hora',
+		hourText: 'Horas',
+		minuteText: 'Minutos',
+		secondText: 'Segundos',
+		millisecText: 'Milisegundos',
+		microsecText: 'Microsegundos',
+		timezoneText: 'Uso horario',
+		currentText: 'Hoy',
+		closeText: 'Cerrar',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['a.m.', 'AM', 'A'],
+		pmNames: ['p.m.', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-et.js
+/* Estonian translation for the jQuery Timepicker Addon */
+/* Written by Karl Sutt (karl@sutt.ee) */
+
+	$.timepicker.regional['et'] = {
+		timeOnlyTitle: 'Vali aeg',
+		timeText: 'Aeg',
+		hourText: 'Tund',
+		minuteText: 'Minut',
+		secondText: 'Sekund',
+		millisecText: 'Millisekundis',
+		microsecText: 'Mikrosekundis',
+		timezoneText: 'Ajavöönd',
+		currentText: 'Praegu',
+		closeText: 'Valmis',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-eu.js
+/* Basque trannslation for JQuery Timepicker Addon */
+/* Translated by Xabi Fer */
+/* Fixed by Asier Iturralde Sarasola - iametza interaktiboa */
+
+	$.timepicker.regional['eu'] = {
+		timeOnlyTitle: 'Aukeratu ordua',
+		timeText: 'Ordua',
+		hourText: 'Orduak',
+		minuteText: 'Minutuak',
+		secondText: 'Segundoak',
+		millisecText: 'Milisegundoak',
+		microsecText: 'Mikrosegundoak',
+		timezoneText: 'Ordu-eremua',
+		currentText: 'Orain',
+		closeText: 'Itxi',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['a.m.', 'AM', 'A'],
+		pmNames: ['p.m.', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-fa.js
+/* Persian translation for the jQuery Timepicker Addon */
+/* Written by Meysam Pour Ganji */
+
+    $.timepicker.regional['fa'] = {
+        timeOnlyTitle: 'انتخاب زمان',
+        timeText: 'زمان',
+        hourText: 'ساعت',
+        minuteText: 'دقیقه',
+        secondText: 'ثانیه',
+        millisecText: 'میلی ثانیه',
+        microsecText: 'میکرو ثانیه',
+        timezoneText: 'منطقه زمانی',
+        currentText: 'الان',
+        closeText: 'انتخاب',
+        timeFormat: 'HH:mm',
+        timeSuffix: '',
+        amNames: ['قبل ظهر', 'AM', 'A'],
+        pmNames: ['بعد ظهر', 'PM', 'P'],
+        isRTL: true
+    };
+
+// source: src/i18n/jquery-ui-timepicker-fi.js
+/* Finnish translation for the jQuery Timepicker Addon */
+/* Written by Juga Paazmaya (http://github.com/paazmaya) */
+
+	$.timepicker.regional['fi'] = {
+		timeOnlyTitle: 'Valitse aika',
+		timeText: 'Aika',
+		hourText: 'Tunti',
+		minuteText: 'Minuutti',
+		secondText: 'Sekunti',
+		millisecText: 'Millisekunnin',
+		microsecText: 'Mikrosekuntia',
+		timezoneText: 'Aikavyöhyke',
+		currentText: 'Nyt',
+		closeText: 'Sulje',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['ap.', 'AM', 'A'],
+		pmNames: ['ip.', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-fr.js
+/* French translation for the jQuery Timepicker Addon */
+/* Written by Thomas Lété */
+
+	$.timepicker.regional['fr'] = {
+		timeOnlyTitle: 'Choisir une heure',
+		timeText: 'Heure',
+		hourText: 'Heures',
+		minuteText: 'Minutes',
+		secondText: 'Secondes',
+		millisecText: 'Millisecondes',
+		microsecText: 'Microsecondes',
+		timezoneText: 'Fuseau horaire',
+		currentText: 'Maintenant',
+		closeText: 'Terminé',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-gl.js
+/* Galician translation for the jQuery Timepicker Addon */
+/* Written by David Barral */
+
+	$.timepicker.regional['gl'] = {
+		timeOnlyTitle: 'Elixir unha hora',
+		timeText: 'Hora',
+		hourText: 'Horas',
+		minuteText: 'Minutos',
+		secondText: 'Segundos',
+		millisecText: 'Milisegundos',
+		microsecText: 'Microssegundos',
+		timezoneText: 'Fuso horario',
+		currentText: 'Agora',
+		closeText: 'Pechar',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['a.m.', 'AM', 'A'],
+		pmNames: ['p.m.', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-he.js
+/* Hebrew translation for the jQuery Timepicker Addon */
+/* Written by Lior Lapid */
+
+	$.timepicker.regional["he"] = {
+		timeOnlyTitle: "בחירת זמן",
+		timeText: "שעה",
+		hourText: "שעות",
+		minuteText: "דקות",
+		secondText: "שניות",
+		millisecText: "אלפית השנייה",
+		microsecText: "מיקרו",
+		timezoneText: "אזור זמן",
+		currentText: "עכשיו",
+		closeText:"סגור",
+		timeFormat: "HH:mm",
+		timeSuffix: '',
+		amNames: ['לפנה"צ', 'AM', 'A'],
+		pmNames: ['אחה"צ', 'PM', 'P'],
+		isRTL: true
+	};
+
+// source: src/i18n/jquery-ui-timepicker-hr.js
+/* Croatian translation for the jQuery Timepicker Addon */
+/* Written by Mladen */
+
+	$.timepicker.regional['hr'] = {
+		timeOnlyTitle: 'Odaberi vrijeme',
+		timeText: 'Vrijeme',
+		hourText: 'Sati',
+		minuteText: 'Minute',
+		secondText: 'Sekunde',
+		millisecText: 'Milisekunde',
+		microsecText: 'Mikrosekunde',
+		timezoneText: 'Vremenska zona',
+		currentText: 'Sada',
+		closeText: 'Gotovo',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['a.m.', 'AM', 'A'],
+		pmNames: ['p.m.', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-hu.js
+/* Hungarian translation for the jQuery Timepicker Addon */
+/* Written by Vas Gábor */
+
+	$.timepicker.regional['hu'] = {
+		timeOnlyTitle: 'Válasszon időpontot',
+		timeText: 'Idő',
+		hourText: 'Óra',
+		minuteText: 'Perc',
+		secondText: 'Másodperc',
+		millisecText: 'Milliszekundumos',
+		microsecText: 'Ezredmásodperc',
+		timezoneText: 'Időzóna',
+		currentText: 'Most',
+		closeText: 'Kész',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['de.', 'AM', 'A'],
+		pmNames: ['du.', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-id.js
+/* Indonesian translation for the jQuery Timepicker Addon */
+/* Written by Nia */
+
+	$.timepicker.regional['id'] = {
+		timeOnlyTitle: 'Pilih Waktu',
+		timeText: 'Waktu',
+		hourText: 'Pukul',
+		minuteText: 'Menit',
+		secondText: 'Detik',
+		millisecText: 'Milidetik',
+		microsecText: 'Mikrodetik',
+		timezoneText: 'Zona Waktu',
+		currentText: 'Sekarang',
+		closeText: 'OK',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-it.js
+/* Italian translation for the jQuery Timepicker Addon */
+/* Written by Marco "logicoder" Del Tongo */
+
+    $.timepicker.regional['it'] = {
+        timeOnlyTitle: 'Scegli orario',
+        timeText: 'Orario',
+        hourText: 'Ora',
+        minuteText: 'Minuti',
+        secondText: 'Secondi',
+        millisecText: 'Millisecondi',
+        microsecText: 'Microsecondi',
+        timezoneText: 'Fuso orario',
+        currentText: 'Adesso',
+        closeText: 'Chiudi',
+        timeFormat: 'HH:mm',
+        timeSuffix: '',
+        amNames: ['m.', 'AM', 'A'],
+        pmNames: ['p.', 'PM', 'P'],
+        isRTL: false
+    };
+
+// source: src/i18n/jquery-ui-timepicker-ja.js
+/* Japanese translation for the jQuery Timepicker Addon */
+/* Written by Jun Omae */
+
+	$.timepicker.regional['ja'] = {
+		timeOnlyTitle: '時間を選択',
+		timeText: '時間',
+		hourText: '時',
+		minuteText: '分',
+		secondText: '秒',
+		millisecText: 'ミリ秒',
+		microsecText: 'マイクロ秒',
+		timezoneText: 'タイムゾーン',
+		currentText: '現時刻',
+		closeText: '閉じる',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['午前', 'AM', 'A'],
+		pmNames: ['午後', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-ko.js
+/* Korean translation for the jQuery Timepicker Addon */
+/* Written by Genie */
+
+	$.timepicker.regional['ko'] = {
+		timeOnlyTitle: '시간 선택',
+		timeText: '시간',
+		hourText: '시',
+		minuteText: '분',
+		secondText: '초',
+		millisecText: '밀리초',
+		microsecText: '마이크로',
+		timezoneText: '표준 시간대',
+		currentText: '현재 시각',
+		closeText: '닫기',
+		timeFormat: 'tt h:mm',
+		timeSuffix: '',
+		amNames: ['오전', 'AM', 'A'],
+		pmNames: ['오후', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-lt.js
+/* Lithuanian translation for the jQuery Timepicker Addon */
+/* Written by Irmantas Šiupšinskas */
+
+	$.timepicker.regional['lt'] = {
+		timeOnlyTitle: 'Pasirinkite laiką',
+		timeText: 'Laikas',
+		hourText: 'Valandos',
+		minuteText: 'Minutės',
+		secondText: 'Sekundės',
+		millisecText: 'Milisekundės',
+		microsecText: 'Mikrosekundės',
+		timezoneText: 'Laiko zona',
+		currentText: 'Dabar',
+		closeText: 'Uždaryti',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['priešpiet', 'AM', 'A'],
+		pmNames: ['popiet', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-lv.js
+/* Latvian translation for the jQuery Timepicker Addon */
+/* Written by Dmitry Bogatykh */
+
+	$.timepicker.regional['lv'] = {
+		timeOnlyTitle: 'Ievadiet laiku',
+		timeText: 'Laiks',
+		hourText: 'Stundas',
+		minuteText: 'Minūtes',
+		secondText: 'Sekundes',
+		millisecText: 'Milisekundes',
+		microsecText: 'Mikrosekundes',
+		timezoneText: 'Laika josla',
+		currentText: 'Tagad',
+		closeText: 'Aizvērt',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'AM', 'A'],
+		pmNames: ['PM', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-nl.js
+/* Dutch translation for the jQuery Timepicker Addon */
+/* Written by Martijn van der Lee */
+
+	$.timepicker.regional['nl'] = {
+		timeOnlyTitle: 'Tijdstip',
+		timeText: 'Tijd',
+		hourText: 'Uur',
+		minuteText: 'Minuut',
+		secondText: 'Seconde',
+		millisecText: 'Milliseconde',
+		microsecText: 'Microseconde',
+		timezoneText: 'Tijdzone',
+		currentText: 'Vandaag',
+		closeText: 'Sluiten',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-no.js
+/* Norwegian translation for the jQuery Timepicker Addon */
+/* Written by Morten Hauan (http://hauan.me) */
+
+	$.timepicker.regional['no'] = {
+		timeOnlyTitle: 'Velg tid',
+		timeText: 'Tid',
+		hourText: 'Time',
+		minuteText: 'Minutt',
+		secondText: 'Sekund',
+		millisecText: 'Millisekund',
+		microsecText: 'mikrosekund',
+		timezoneText: 'Tidssone',
+		currentText: 'Nå',
+		closeText: 'Lukk',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['am', 'AM', 'A'],
+		pmNames: ['pm', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-pl.js
+/* Polish translation for the jQuery Timepicker Addon */
+/* Written by Michał Pena */
+
+	$.timepicker.regional['pl'] = {
+		timeOnlyTitle: 'Wybierz godzinę',
+		timeText: 'Czas',
+		hourText: 'Godzina',
+		minuteText: 'Minuta',
+		secondText: 'Sekunda',
+		millisecText: 'Milisekunda',
+		microsecText: 'Mikrosekunda',
+		timezoneText: 'Strefa czasowa',
+		currentText: 'Teraz',
+		closeText: 'Gotowe',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-pt-br.js
+/* Brazilian Portuguese translation for the jQuery Timepicker Addon */
+/* Written by Diogo Damiani (diogodamiani@gmail.com) */
+
+	$.timepicker.regional['pt-br'] = {
+		timeOnlyTitle: 'Escolha o horário',
+		timeText: 'Horário',
+		hourText: 'Hora',
+		minuteText: 'Minutos',
+		secondText: 'Segundos',
+		millisecText: 'Milissegundos',
+		microsecText: 'Microssegundos',
+		timezoneText: 'Fuso horário',
+		currentText: 'Agora',
+		closeText: 'Fechar',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['a.m.', 'AM', 'A'],
+		pmNames: ['p.m.', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-pt.js
+/* Portuguese translation for the jQuery Timepicker Addon */
+/* Written by Luan Almeida */
+
+	$.timepicker.regional['pt'] = {
+		timeOnlyTitle: 'Escolha uma hora',
+		timeText: 'Hora',
+		hourText: 'Horas',
+		minuteText: 'Minutos',
+		secondText: 'Segundos',
+		millisecText: 'Milissegundos',
+		microsecText: 'Microssegundos',
+		timezoneText: 'Fuso horário',
+		currentText: 'Agora',
+		closeText: 'Fechar',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['a.m.', 'AM', 'A'],
+		pmNames: ['p.m.', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-ro.js
+/* Romanian translation for the jQuery Timepicker Addon */
+/* Written by Romeo Adrian Cioaba */
+
+	$.timepicker.regional['ro'] = {
+		timeOnlyTitle: 'Alegeţi o oră',
+		timeText: 'Timp',
+		hourText: 'Ore',
+		minuteText: 'Minute',
+		secondText: 'Secunde',
+		millisecText: 'Milisecunde',
+		microsecText: 'Microsecunde',
+		timezoneText: 'Fus orar',
+		currentText: 'Acum',
+		closeText: 'Închide',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-ru.js
+/* Russian translation for the jQuery Timepicker Addon */
+/* Written by Trent Richardson */
+
+	$.timepicker.regional['ru'] = {
+		timeOnlyTitle: 'Выберите время',
+		timeText: 'Время',
+		hourText: 'Часы',
+		minuteText: 'Минуты',
+		secondText: 'Секунды',
+		millisecText: 'Миллисекунды',
+		microsecText: 'Микросекунды',
+		timezoneText: 'Часовой пояс',
+		currentText: 'Сейчас',
+		closeText: 'Закрыть',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-sk.js
+/* Slovak translation for the jQuery Timepicker Addon */
+/* Written by David Vallner */
+
+	$.timepicker.regional['sk'] = {
+		timeOnlyTitle: 'Zvoľte čas',
+		timeText: 'Čas',
+		hourText: 'Hodiny',
+		minuteText: 'Minúty',
+		secondText: 'Sekundy',
+		millisecText: 'Milisekundy',
+		microsecText: 'Mikrosekundy',
+		timezoneText: 'Časové pásmo',
+		currentText: 'Teraz',
+		closeText: 'Zavrieť',
+		timeFormat: 'H:m',
+		timeSuffix: '',
+		amNames: ['dop.', 'AM', 'A'],
+		pmNames: ['pop.', 'PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-sl.js
+/* Slovenian translation for the jQuery Timepicker Addon */
+/* Written by Hadalin (https://github.com/hadalin) */
+
+    $.timepicker.regional['sl'] = {
+        timeOnlyTitle: 'Izberite čas',
+        timeText: 'Čas',
+        hourText: 'Ura',
+        minuteText: 'Minute',
+        secondText: 'Sekunde',
+        millisecText: 'Milisekunde',
+        microsecText: 'Mikrosekunde',
+        timezoneText: 'Časovni pas',
+        currentText: 'Sedaj',
+        closeText: 'Zapri',
+        timeFormat: 'HH:mm',
+        timeSuffix: '',
+        amNames: ['dop.', 'AM', 'A'],
+        pmNames: ['pop.', 'PM', 'P'],
+        isRTL: false
+    };
+
+// source: src/i18n/jquery-ui-timepicker-sr-RS.js
+/* Serbian cyrilic translation for the jQuery Timepicker Addon */
+/* Written by Vladimir Jelovac */
+
+	$.timepicker.regional['sr-RS'] = {
+		timeOnlyTitle: 'Одаберите време',
+		timeText: 'Време',
+		hourText: 'Сати',
+		minuteText: 'Минути',
+		secondText: 'Секунде',
+		millisecText: 'Милисекунде',
+		microsecText: 'Микросекунде',
+		timezoneText: 'Временска зона',
+		currentText: 'Сада',
+		closeText: 'Затвори',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-sr-YU.js
+/* Serbian latin translation for the jQuery Timepicker Addon */
+/* Written by Vladimir Jelovac */
+
+	$.timepicker.regional['sr-YU'] = {
+		timeOnlyTitle: 'Odaberite vreme',
+		timeText: 'Vreme',
+		hourText: 'Sati',
+		minuteText: 'Minuti',
+		secondText: 'Sekunde',
+		millisecText: 'Milisekunde',
+		microsecText: 'Mikrosekunde',
+		timezoneText: 'Vremenska zona',
+		currentText: 'Sada',
+		closeText: 'Zatvori',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-sv.js
+/* Swedish translation for the jQuery Timepicker Addon */
+/* Written by Nevon */
+
+	$.timepicker.regional['sv'] = {
+		timeOnlyTitle: 'Välj en tid',
+		timeText: 'Tid',
+		hourText: 'Timme',
+		minuteText: 'Minut',
+		secondText: 'Sekund',
+		millisecText: 'Millisekund',
+		microsecText: 'Mikrosekund',
+		timezoneText: 'Tidszon',
+		currentText: 'Nu',
+		closeText: 'Stäng',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-th.js
+/* Thai translation for the jQuery Timepicker Addon */
+/* Written by Yote Wachirapornpongsa */
+
+	$.timepicker.regional['th'] = {
+		timeOnlyTitle: 'เลือกเวลา',
+		timeText: 'เวลา ',
+		hourText: 'ชั่วโมง ',
+		minuteText: 'นาที',
+		secondText: 'วินาที',
+		millisecText: 'มิลลิวินาที',
+		microsecText: 'ไมโคริวินาที',
+		timezoneText: 'เขตเวลา',
+		currentText: 'เวลาปัจจุบัน',
+		closeText: 'ปิด',
+		timeFormat: 'hh:mm tt',
+		timeSuffix: ''
+	};
+
+// source: src/i18n/jquery-ui-timepicker-tr.js
+/* Turkish translation for the jQuery Timepicker Addon */
+/* Written by Fehmi Can Saglam, Edited by Goktug Ozturk */
+
+	$.timepicker.regional['tr'] = {
+		timeOnlyTitle: 'Zaman Seçiniz',
+		timeText: 'Zaman',
+		hourText: 'Saat',
+		minuteText: 'Dakika',
+		secondText: 'Saniye',
+		millisecText: 'Milisaniye',
+		microsecText: 'Mikrosaniye',
+		timezoneText: 'Zaman Dilimi',
+		currentText: 'Şu an',
+		closeText: 'Tamam',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['ÖÖ', 'Ö'],
+		pmNames: ['ÖS', 'S'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-uk.js
+/* Ukrainian translation for the jQuery Timepicker Addon */
+/* Written by Sergey Noskov */
+
+	$.timepicker.regional['uk'] = {
+		timeOnlyTitle: 'Виберіть час',
+		timeText: 'Час',
+		hourText: 'Години',
+		minuteText: 'Хвилини',
+		secondText: 'Секунди',
+		millisecText: 'Мілісекунди',
+		microsecText: 'Мікросекунди',
+		timezoneText: 'Часовий пояс',
+		currentText: 'Зараз',
+		closeText: 'Закрити',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-vi.js
+/* Vietnamese translation for the jQuery Timepicker Addon */
+/* Written by Nguyen Dinh Trung */
+
+	$.timepicker.regional['vi'] = {
+		timeOnlyTitle: 'Chọn giờ',
+		timeText: 'Thời gian',
+		hourText: 'Giờ',
+		minuteText: 'Phút',
+		secondText: 'Giây',
+		millisecText: 'Mili giây',
+		microsecText: 'Micrô giây',
+		timezoneText: 'Múi giờ',
+		currentText: 'Hiện thời',
+		closeText: 'Đóng',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['SA', 'S'],
+		pmNames: ['CH', 'C'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-zh-CN.js
+/* Simplified Chinese translation for the jQuery Timepicker Addon /
+/ Written by Will Lu */
+
+	$.timepicker.regional['zh-CN'] = {
+		timeOnlyTitle: '选择时间',
+		timeText: '时间',
+		hourText: '小时',
+		minuteText: '分钟',
+		secondText: '秒钟',
+		millisecText: '毫秒',
+		microsecText: '微秒',
+		timezoneText: '时区',
+		currentText: '现在时间',
+		closeText: '关闭',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['AM', 'A'],
+		pmNames: ['PM', 'P'],
+		isRTL: false
+	};
+
+// source: src/i18n/jquery-ui-timepicker-zh-TW.js
+/* Chinese translation for the jQuery Timepicker Addon */
+/* Written by Alang.lin */
+
+	$.timepicker.regional['zh-TW'] = {
+		timeOnlyTitle: '選擇時分秒',
+		timeText: '時間',
+		hourText: '時',
+		minuteText: '分',
+		secondText: '秒',
+		millisecText: '毫秒',
+		microsecText: '微秒',
+		timezoneText: '時區',
+		currentText: '現在時間',
+		closeText: '確定',
+		timeFormat: 'HH:mm',
+		timeSuffix: '',
+		amNames: ['上午', 'AM', 'A'],
+		pmNames: ['下午', 'PM', 'P'],
+		isRTL: false
+	};
+
+})(jQuery);
+
 /*!
  * jQuery Validation Plugin v1.13.1
  *
@@ -33964,6 +38343,571 @@ $.extend($.fn, {
 });
 
 }));
+/*! jQuery UI - v1.11.1+CommonJS - 2014-09-17
+* http://jqueryui.com
+* Includes: widget.js
+* Copyright 2014 jQuery Foundation and other contributors; Licensed MIT */
+
+(function( factory ) {
+	if ( typeof define === "function" && define.amd ) {
+
+		// AMD. Register as an anonymous module.
+		define([ "jquery" ], factory );
+
+	} else if (typeof exports === "object") {
+		// Node/CommonJS:
+		factory(require("jquery"));
+
+	} else {
+
+		// Browser globals
+		factory( jQuery );
+	}
+}(function( $ ) {
+/*!
+ * jQuery UI Widget 1.11.1
+ * http://jqueryui.com
+ *
+ * Copyright 2014 jQuery Foundation and other contributors
+ * Released under the MIT license.
+ * http://jquery.org/license
+ *
+ * http://api.jqueryui.com/jQuery.widget/
+ */
+
+
+var widget_uuid = 0,
+	widget_slice = Array.prototype.slice;
+
+$.cleanData = (function( orig ) {
+	return function( elems ) {
+		var events, elem, i;
+		for ( i = 0; (elem = elems[i]) != null; i++ ) {
+			try {
+
+				// Only trigger remove when necessary to save time
+				events = $._data( elem, "events" );
+				if ( events && events.remove ) {
+					$( elem ).triggerHandler( "remove" );
+				}
+
+			// http://bugs.jquery.com/ticket/8235
+			} catch( e ) {}
+		}
+		orig( elems );
+	};
+})( $.cleanData );
+
+$.widget = function( name, base, prototype ) {
+	var fullName, existingConstructor, constructor, basePrototype,
+		// proxiedPrototype allows the provided prototype to remain unmodified
+		// so that it can be used as a mixin for multiple widgets (#8876)
+		proxiedPrototype = {},
+		namespace = name.split( "." )[ 0 ];
+
+	name = name.split( "." )[ 1 ];
+	fullName = namespace + "-" + name;
+
+	if ( !prototype ) {
+		prototype = base;
+		base = $.Widget;
+	}
+
+	// create selector for plugin
+	$.expr[ ":" ][ fullName.toLowerCase() ] = function( elem ) {
+		return !!$.data( elem, fullName );
+	};
+
+	$[ namespace ] = $[ namespace ] || {};
+	existingConstructor = $[ namespace ][ name ];
+	constructor = $[ namespace ][ name ] = function( options, element ) {
+		// allow instantiation without "new" keyword
+		if ( !this._createWidget ) {
+			return new constructor( options, element );
+		}
+
+		// allow instantiation without initializing for simple inheritance
+		// must use "new" keyword (the code above always passes args)
+		if ( arguments.length ) {
+			this._createWidget( options, element );
+		}
+	};
+	// extend with the existing constructor to carry over any static properties
+	$.extend( constructor, existingConstructor, {
+		version: prototype.version,
+		// copy the object used to create the prototype in case we need to
+		// redefine the widget later
+		_proto: $.extend( {}, prototype ),
+		// track widgets that inherit from this widget in case this widget is
+		// redefined after a widget inherits from it
+		_childConstructors: []
+	});
+
+	basePrototype = new base();
+	// we need to make the options hash a property directly on the new instance
+	// otherwise we'll modify the options hash on the prototype that we're
+	// inheriting from
+	basePrototype.options = $.widget.extend( {}, basePrototype.options );
+	$.each( prototype, function( prop, value ) {
+		if ( !$.isFunction( value ) ) {
+			proxiedPrototype[ prop ] = value;
+			return;
+		}
+		proxiedPrototype[ prop ] = (function() {
+			var _super = function() {
+					return base.prototype[ prop ].apply( this, arguments );
+				},
+				_superApply = function( args ) {
+					return base.prototype[ prop ].apply( this, args );
+				};
+			return function() {
+				var __super = this._super,
+					__superApply = this._superApply,
+					returnValue;
+
+				this._super = _super;
+				this._superApply = _superApply;
+
+				returnValue = value.apply( this, arguments );
+
+				this._super = __super;
+				this._superApply = __superApply;
+
+				return returnValue;
+			};
+		})();
+	});
+	constructor.prototype = $.widget.extend( basePrototype, {
+		// TODO: remove support for widgetEventPrefix
+		// always use the name + a colon as the prefix, e.g., draggable:start
+		// don't prefix for widgets that aren't DOM-based
+		widgetEventPrefix: existingConstructor ? (basePrototype.widgetEventPrefix || name) : name
+	}, proxiedPrototype, {
+		constructor: constructor,
+		namespace: namespace,
+		widgetName: name,
+		widgetFullName: fullName
+	});
+
+	// If this widget is being redefined then we need to find all widgets that
+	// are inheriting from it and redefine all of them so that they inherit from
+	// the new version of this widget. We're essentially trying to replace one
+	// level in the prototype chain.
+	if ( existingConstructor ) {
+		$.each( existingConstructor._childConstructors, function( i, child ) {
+			var childPrototype = child.prototype;
+
+			// redefine the child widget using the same prototype that was
+			// originally used, but inherit from the new version of the base
+			$.widget( childPrototype.namespace + "." + childPrototype.widgetName, constructor, child._proto );
+		});
+		// remove the list of existing child constructors from the old constructor
+		// so the old child constructors can be garbage collected
+		delete existingConstructor._childConstructors;
+	} else {
+		base._childConstructors.push( constructor );
+	}
+
+	$.widget.bridge( name, constructor );
+
+	return constructor;
+};
+
+$.widget.extend = function( target ) {
+	var input = widget_slice.call( arguments, 1 ),
+		inputIndex = 0,
+		inputLength = input.length,
+		key,
+		value;
+	for ( ; inputIndex < inputLength; inputIndex++ ) {
+		for ( key in input[ inputIndex ] ) {
+			value = input[ inputIndex ][ key ];
+			if ( input[ inputIndex ].hasOwnProperty( key ) && value !== undefined ) {
+				// Clone objects
+				if ( $.isPlainObject( value ) ) {
+					target[ key ] = $.isPlainObject( target[ key ] ) ?
+						$.widget.extend( {}, target[ key ], value ) :
+						// Don't extend strings, arrays, etc. with objects
+						$.widget.extend( {}, value );
+				// Copy everything else by reference
+				} else {
+					target[ key ] = value;
+				}
+			}
+		}
+	}
+	return target;
+};
+
+$.widget.bridge = function( name, object ) {
+	var fullName = object.prototype.widgetFullName || name;
+	$.fn[ name ] = function( options ) {
+		var isMethodCall = typeof options === "string",
+			args = widget_slice.call( arguments, 1 ),
+			returnValue = this;
+
+		// allow multiple hashes to be passed on init
+		options = !isMethodCall && args.length ?
+			$.widget.extend.apply( null, [ options ].concat(args) ) :
+			options;
+
+		if ( isMethodCall ) {
+			this.each(function() {
+				var methodValue,
+					instance = $.data( this, fullName );
+				if ( options === "instance" ) {
+					returnValue = instance;
+					return false;
+				}
+				if ( !instance ) {
+					return $.error( "cannot call methods on " + name + " prior to initialization; " +
+						"attempted to call method '" + options + "'" );
+				}
+				if ( !$.isFunction( instance[options] ) || options.charAt( 0 ) === "_" ) {
+					return $.error( "no such method '" + options + "' for " + name + " widget instance" );
+				}
+				methodValue = instance[ options ].apply( instance, args );
+				if ( methodValue !== instance && methodValue !== undefined ) {
+					returnValue = methodValue && methodValue.jquery ?
+						returnValue.pushStack( methodValue.get() ) :
+						methodValue;
+					return false;
+				}
+			});
+		} else {
+			this.each(function() {
+				var instance = $.data( this, fullName );
+				if ( instance ) {
+					instance.option( options || {} );
+					if ( instance._init ) {
+						instance._init();
+					}
+				} else {
+					$.data( this, fullName, new object( options, this ) );
+				}
+			});
+		}
+
+		return returnValue;
+	};
+};
+
+$.Widget = function( /* options, element */ ) {};
+$.Widget._childConstructors = [];
+
+$.Widget.prototype = {
+	widgetName: "widget",
+	widgetEventPrefix: "",
+	defaultElement: "<div>",
+	options: {
+		disabled: false,
+
+		// callbacks
+		create: null
+	},
+	_createWidget: function( options, element ) {
+		element = $( element || this.defaultElement || this )[ 0 ];
+		this.element = $( element );
+		this.uuid = widget_uuid++;
+		this.eventNamespace = "." + this.widgetName + this.uuid;
+		this.options = $.widget.extend( {},
+			this.options,
+			this._getCreateOptions(),
+			options );
+
+		this.bindings = $();
+		this.hoverable = $();
+		this.focusable = $();
+
+		if ( element !== this ) {
+			$.data( element, this.widgetFullName, this );
+			this._on( true, this.element, {
+				remove: function( event ) {
+					if ( event.target === element ) {
+						this.destroy();
+					}
+				}
+			});
+			this.document = $( element.style ?
+				// element within the document
+				element.ownerDocument :
+				// element is window or document
+				element.document || element );
+			this.window = $( this.document[0].defaultView || this.document[0].parentWindow );
+		}
+
+		this._create();
+		this._trigger( "create", null, this._getCreateEventData() );
+		this._init();
+	},
+	_getCreateOptions: $.noop,
+	_getCreateEventData: $.noop,
+	_create: $.noop,
+	_init: $.noop,
+
+	destroy: function() {
+		this._destroy();
+		// we can probably remove the unbind calls in 2.0
+		// all event bindings should go through this._on()
+		this.element
+			.unbind( this.eventNamespace )
+			.removeData( this.widgetFullName )
+			// support: jquery <1.6.3
+			// http://bugs.jquery.com/ticket/9413
+			.removeData( $.camelCase( this.widgetFullName ) );
+		this.widget()
+			.unbind( this.eventNamespace )
+			.removeAttr( "aria-disabled" )
+			.removeClass(
+				this.widgetFullName + "-disabled " +
+				"ui-state-disabled" );
+
+		// clean up events and states
+		this.bindings.unbind( this.eventNamespace );
+		this.hoverable.removeClass( "ui-state-hover" );
+		this.focusable.removeClass( "ui-state-focus" );
+	},
+	_destroy: $.noop,
+
+	widget: function() {
+		return this.element;
+	},
+
+	option: function( key, value ) {
+		var options = key,
+			parts,
+			curOption,
+			i;
+
+		if ( arguments.length === 0 ) {
+			// don't return a reference to the internal hash
+			return $.widget.extend( {}, this.options );
+		}
+
+		if ( typeof key === "string" ) {
+			// handle nested keys, e.g., "foo.bar" => { foo: { bar: ___ } }
+			options = {};
+			parts = key.split( "." );
+			key = parts.shift();
+			if ( parts.length ) {
+				curOption = options[ key ] = $.widget.extend( {}, this.options[ key ] );
+				for ( i = 0; i < parts.length - 1; i++ ) {
+					curOption[ parts[ i ] ] = curOption[ parts[ i ] ] || {};
+					curOption = curOption[ parts[ i ] ];
+				}
+				key = parts.pop();
+				if ( arguments.length === 1 ) {
+					return curOption[ key ] === undefined ? null : curOption[ key ];
+				}
+				curOption[ key ] = value;
+			} else {
+				if ( arguments.length === 1 ) {
+					return this.options[ key ] === undefined ? null : this.options[ key ];
+				}
+				options[ key ] = value;
+			}
+		}
+
+		this._setOptions( options );
+
+		return this;
+	},
+	_setOptions: function( options ) {
+		var key;
+
+		for ( key in options ) {
+			this._setOption( key, options[ key ] );
+		}
+
+		return this;
+	},
+	_setOption: function( key, value ) {
+		this.options[ key ] = value;
+
+		if ( key === "disabled" ) {
+			this.widget()
+				.toggleClass( this.widgetFullName + "-disabled", !!value );
+
+			// If the widget is becoming disabled, then nothing is interactive
+			if ( value ) {
+				this.hoverable.removeClass( "ui-state-hover" );
+				this.focusable.removeClass( "ui-state-focus" );
+			}
+		}
+
+		return this;
+	},
+
+	enable: function() {
+		return this._setOptions({ disabled: false });
+	},
+	disable: function() {
+		return this._setOptions({ disabled: true });
+	},
+
+	_on: function( suppressDisabledCheck, element, handlers ) {
+		var delegateElement,
+			instance = this;
+
+		// no suppressDisabledCheck flag, shuffle arguments
+		if ( typeof suppressDisabledCheck !== "boolean" ) {
+			handlers = element;
+			element = suppressDisabledCheck;
+			suppressDisabledCheck = false;
+		}
+
+		// no element argument, shuffle and use this.element
+		if ( !handlers ) {
+			handlers = element;
+			element = this.element;
+			delegateElement = this.widget();
+		} else {
+			element = delegateElement = $( element );
+			this.bindings = this.bindings.add( element );
+		}
+
+		$.each( handlers, function( event, handler ) {
+			function handlerProxy() {
+				// allow widgets to customize the disabled handling
+				// - disabled as an array instead of boolean
+				// - disabled class as method for disabling individual parts
+				if ( !suppressDisabledCheck &&
+						( instance.options.disabled === true ||
+							$( this ).hasClass( "ui-state-disabled" ) ) ) {
+					return;
+				}
+				return ( typeof handler === "string" ? instance[ handler ] : handler )
+					.apply( instance, arguments );
+			}
+
+			// copy the guid so direct unbinding works
+			if ( typeof handler !== "string" ) {
+				handlerProxy.guid = handler.guid =
+					handler.guid || handlerProxy.guid || $.guid++;
+			}
+
+			var match = event.match( /^([\w:-]*)\s*(.*)$/ ),
+				eventName = match[1] + instance.eventNamespace,
+				selector = match[2];
+			if ( selector ) {
+				delegateElement.delegate( selector, eventName, handlerProxy );
+			} else {
+				element.bind( eventName, handlerProxy );
+			}
+		});
+	},
+
+	_off: function( element, eventName ) {
+		eventName = (eventName || "").split( " " ).join( this.eventNamespace + " " ) + this.eventNamespace;
+		element.unbind( eventName ).undelegate( eventName );
+	},
+
+	_delay: function( handler, delay ) {
+		function handlerProxy() {
+			return ( typeof handler === "string" ? instance[ handler ] : handler )
+				.apply( instance, arguments );
+		}
+		var instance = this;
+		return setTimeout( handlerProxy, delay || 0 );
+	},
+
+	_hoverable: function( element ) {
+		this.hoverable = this.hoverable.add( element );
+		this._on( element, {
+			mouseenter: function( event ) {
+				$( event.currentTarget ).addClass( "ui-state-hover" );
+			},
+			mouseleave: function( event ) {
+				$( event.currentTarget ).removeClass( "ui-state-hover" );
+			}
+		});
+	},
+
+	_focusable: function( element ) {
+		this.focusable = this.focusable.add( element );
+		this._on( element, {
+			focusin: function( event ) {
+				$( event.currentTarget ).addClass( "ui-state-focus" );
+			},
+			focusout: function( event ) {
+				$( event.currentTarget ).removeClass( "ui-state-focus" );
+			}
+		});
+	},
+
+	_trigger: function( type, event, data ) {
+		var prop, orig,
+			callback = this.options[ type ];
+
+		data = data || {};
+		event = $.Event( event );
+		event.type = ( type === this.widgetEventPrefix ?
+			type :
+			this.widgetEventPrefix + type ).toLowerCase();
+		// the original event may come from any element
+		// so we need to reset the target on the new event
+		event.target = this.element[ 0 ];
+
+		// copy original event properties over to the new event
+		orig = event.originalEvent;
+		if ( orig ) {
+			for ( prop in orig ) {
+				if ( !( prop in event ) ) {
+					event[ prop ] = orig[ prop ];
+				}
+			}
+		}
+
+		this.element.trigger( event, data );
+		return !( $.isFunction( callback ) &&
+			callback.apply( this.element[0], [ event ].concat( data ) ) === false ||
+			event.isDefaultPrevented() );
+	}
+};
+
+$.each( { show: "fadeIn", hide: "fadeOut" }, function( method, defaultEffect ) {
+	$.Widget.prototype[ "_" + method ] = function( element, options, callback ) {
+		if ( typeof options === "string" ) {
+			options = { effect: options };
+		}
+		var hasOptions,
+			effectName = !options ?
+				method :
+				options === true || typeof options === "number" ?
+					defaultEffect :
+					options.effect || defaultEffect;
+		options = options || {};
+		if ( typeof options === "number" ) {
+			options = { duration: options };
+		}
+		hasOptions = !$.isEmptyObject( options );
+		options.complete = callback;
+		if ( options.delay ) {
+			element.delay( options.delay );
+		}
+		if ( hasOptions && $.effects && $.effects.effect[ effectName ] ) {
+			element[ method ]( options );
+		} else if ( effectName !== method && element[ effectName ] ) {
+			element[ effectName ]( options.duration, options.easing, callback );
+		} else {
+			element.queue(function( next ) {
+				$( this )[ method ]();
+				if ( callback ) {
+					callback.call( element[ 0 ] );
+				}
+				next();
+			});
+		}
+	};
+});
+
+var widget = $.widget;
+
+
+
+}));
+
+!function(a){"use strict";var b=function(a,c,d){var e,f,g=document.createElement("img");if(g.onerror=c,g.onload=function(){!f||d&&d.noRevoke||b.revokeObjectURL(f),c&&c(b.scale(g,d))},b.isInstanceOf("Blob",a)||b.isInstanceOf("File",a))e=f=b.createObjectURL(a),g._type=a.type;else{if("string"!=typeof a)return!1;e=a,d&&d.crossOrigin&&(g.crossOrigin=d.crossOrigin)}return e?(g.src=e,g):b.readFile(a,function(a){var b=a.target;b&&b.result?g.src=b.result:c&&c(a)})},c=window.createObjectURL&&window||window.URL&&URL.revokeObjectURL&&URL||window.webkitURL&&webkitURL;b.isInstanceOf=function(a,b){return Object.prototype.toString.call(b)==="[object "+a+"]"},b.transformCoordinates=function(){},b.getTransformedOptions=function(a,b){var c,d,e,f,g=b.aspectRatio;if(!g)return b;c={};for(d in b)b.hasOwnProperty(d)&&(c[d]=b[d]);return c.crop=!0,e=a.naturalWidth||a.width,f=a.naturalHeight||a.height,e/f>g?(c.maxWidth=f*g,c.maxHeight=f):(c.maxWidth=e,c.maxHeight=e/g),c},b.renderImageToCanvas=function(a,b,c,d,e,f,g,h,i,j){return a.getContext("2d").drawImage(b,c,d,e,f,g,h,i,j),a},b.hasCanvasOption=function(a){return a.canvas||a.crop||a.aspectRatio},b.scale=function(a,c){c=c||{};var d,e,f,g,h,i,j,k,l,m=document.createElement("canvas"),n=a.getContext||b.hasCanvasOption(c)&&m.getContext,o=a.naturalWidth||a.width,p=a.naturalHeight||a.height,q=o,r=p,s=function(){var a=Math.max((f||q)/q,(g||r)/r);a>1&&(q*=a,r*=a)},t=function(){var a=Math.min((d||q)/q,(e||r)/r);1>a&&(q*=a,r*=a)};return n&&(c=b.getTransformedOptions(a,c),j=c.left||0,k=c.top||0,c.sourceWidth?(h=c.sourceWidth,void 0!==c.right&&void 0===c.left&&(j=o-h-c.right)):h=o-j-(c.right||0),c.sourceHeight?(i=c.sourceHeight,void 0!==c.bottom&&void 0===c.top&&(k=p-i-c.bottom)):i=p-k-(c.bottom||0),q=h,r=i),d=c.maxWidth,e=c.maxHeight,f=c.minWidth,g=c.minHeight,n&&d&&e&&c.crop?(q=d,r=e,l=h/i-d/e,0>l?(i=e*h/d,void 0===c.top&&void 0===c.bottom&&(k=(p-i)/2)):l>0&&(h=d*i/e,void 0===c.left&&void 0===c.right&&(j=(o-h)/2))):((c.contain||c.cover)&&(f=d=d||f,g=e=e||g),c.cover?(t(),s()):(s(),t())),n?(m.width=q,m.height=r,b.transformCoordinates(m,c),b.renderImageToCanvas(m,a,j,k,h,i,0,0,q,r)):(a.width=q,a.height=r,a)},b.createObjectURL=function(a){return c?c.createObjectURL(a):!1},b.revokeObjectURL=function(a){return c?c.revokeObjectURL(a):!1},b.readFile=function(a,b,c){if(window.FileReader){var d=new FileReader;if(d.onload=d.onerror=b,c=c||"readAsDataURL",d[c])return d[c](a),d}return!1},"function"==typeof define&&define.amd?define(function(){return b}):a.loadImage=b}(this),function(a){"use strict";"function"==typeof define&&define.amd?define(["load-image"],a):a(window.loadImage)}(function(a){"use strict";if(window.navigator&&window.navigator.platform&&/iP(hone|od|ad)/.test(window.navigator.platform)){var b=a.renderImageToCanvas;a.detectSubsampling=function(a){var b,c;return a.width*a.height>1048576?(b=document.createElement("canvas"),b.width=b.height=1,c=b.getContext("2d"),c.drawImage(a,-a.width+1,0),0===c.getImageData(0,0,1,1).data[3]):!1},a.detectVerticalSquash=function(a,b){var c,d,e,f,g,h=a.naturalHeight||a.height,i=document.createElement("canvas"),j=i.getContext("2d");for(b&&(h/=2),i.width=1,i.height=h,j.drawImage(a,0,0),c=j.getImageData(0,0,1,h).data,d=0,e=h,f=h;f>d;)g=c[4*(f-1)+3],0===g?e=f:d=f,f=e+d>>1;return f/h||1},a.renderImageToCanvas=function(c,d,e,f,g,h,i,j,k,l){if("image/jpeg"===d._type){var m,n,o,p,q=c.getContext("2d"),r=document.createElement("canvas"),s=1024,t=r.getContext("2d");if(r.width=s,r.height=s,q.save(),m=a.detectSubsampling(d),m&&(e/=2,f/=2,g/=2,h/=2),n=a.detectVerticalSquash(d,m),m||1!==n){for(f*=n,k=Math.ceil(s*k/g),l=Math.ceil(s*l/h/n),j=0,p=0;h>p;){for(i=0,o=0;g>o;)t.clearRect(0,0,s,s),t.drawImage(d,e,f,g,h,-o,-p,g,h),q.drawImage(r,0,0,s,s,i,j,k,l),o+=s,i+=k;p+=s,j+=l}return q.restore(),c}}return b(c,d,e,f,g,h,i,j,k,l)}}}),function(a){"use strict";"function"==typeof define&&define.amd?define(["load-image"],a):a(window.loadImage)}(function(a){"use strict";var b=a.hasCanvasOption,c=a.transformCoordinates,d=a.getTransformedOptions;a.hasCanvasOption=function(c){return b.call(a,c)||c.orientation},a.transformCoordinates=function(b,d){c.call(a,b,d);var e=b.getContext("2d"),f=b.width,g=b.height,h=d.orientation;if(h&&!(h>8))switch(h>4&&(b.width=g,b.height=f),h){case 2:e.translate(f,0),e.scale(-1,1);break;case 3:e.translate(f,g),e.rotate(Math.PI);break;case 4:e.translate(0,g),e.scale(1,-1);break;case 5:e.rotate(.5*Math.PI),e.scale(1,-1);break;case 6:e.rotate(.5*Math.PI),e.translate(0,-g);break;case 7:e.rotate(.5*Math.PI),e.translate(f,-g),e.scale(-1,1);break;case 8:e.rotate(-.5*Math.PI),e.translate(-f,0)}},a.getTransformedOptions=function(b,c){var e,f,g=d.call(a,b,c),h=g.orientation;if(!h||h>8||1===h)return g;e={};for(f in g)g.hasOwnProperty(f)&&(e[f]=g[f]);switch(g.orientation){case 2:e.left=g.right,e.right=g.left;break;case 3:e.left=g.right,e.top=g.bottom,e.right=g.left,e.bottom=g.top;break;case 4:e.top=g.bottom,e.bottom=g.top;break;case 5:e.left=g.top,e.top=g.left,e.right=g.bottom,e.bottom=g.right;break;case 6:e.left=g.top,e.top=g.right,e.right=g.bottom,e.bottom=g.left;break;case 7:e.left=g.bottom,e.top=g.right,e.right=g.top,e.bottom=g.left;break;case 8:e.left=g.bottom,e.top=g.left,e.right=g.top,e.bottom=g.right}return g.orientation>4&&(e.maxWidth=g.maxHeight,e.maxHeight=g.maxWidth,e.minWidth=g.minHeight,e.minHeight=g.minWidth,e.sourceWidth=g.sourceHeight,e.sourceHeight=g.sourceWidth),e}}),function(a){"use strict";"function"==typeof define&&define.amd?define(["load-image"],a):a(window.loadImage)}(function(a){"use strict";var b=window.Blob&&(Blob.prototype.slice||Blob.prototype.webkitSlice||Blob.prototype.mozSlice);a.blobSlice=b&&function(){var a=this.slice||this.webkitSlice||this.mozSlice;return a.apply(this,arguments)},a.metaDataParsers={jpeg:{65505:[]}},a.parseMetaData=function(b,c,d){d=d||{};var e=this,f=d.maxMetaDataSize||262144,g={},h=!(window.DataView&&b&&b.size>=12&&"image/jpeg"===b.type&&a.blobSlice);(h||!a.readFile(a.blobSlice.call(b,0,f),function(b){if(b.target.error)return console.log(b.target.error),void c(g);var f,h,i,j,k=b.target.result,l=new DataView(k),m=2,n=l.byteLength-4,o=m;if(65496===l.getUint16(0)){for(;n>m&&(f=l.getUint16(m),f>=65504&&65519>=f||65534===f);){if(h=l.getUint16(m+2)+2,m+h>l.byteLength){console.log("Invalid meta data: Invalid segment size.");break}if(i=a.metaDataParsers.jpeg[f])for(j=0;j<i.length;j+=1)i[j].call(e,l,m,h,g,d);m+=h,o=m}!d.disableImageHead&&o>6&&(g.imageHead=k.slice?k.slice(0,o):new Uint8Array(k).subarray(0,o))}else console.log("Invalid JPEG file: Missing JPEG marker.");c(g)},"readAsArrayBuffer"))&&c(g)}}),function(a){"use strict";"function"==typeof define&&define.amd?define(["load-image","load-image-meta"],a):a(window.loadImage)}(function(a){"use strict";a.ExifMap=function(){return this},a.ExifMap.prototype.map={Orientation:274},a.ExifMap.prototype.get=function(a){return this[a]||this[this.map[a]]},a.getExifThumbnail=function(a,b,c){var d,e,f;if(!c||b+c>a.byteLength)return void console.log("Invalid Exif data: Invalid thumbnail data.");for(d=[],e=0;c>e;e+=1)f=a.getUint8(b+e),d.push((16>f?"0":"")+f.toString(16));return"data:image/jpeg,%"+d.join("%")},a.exifTagTypes={1:{getValue:function(a,b){return a.getUint8(b)},size:1},2:{getValue:function(a,b){return String.fromCharCode(a.getUint8(b))},size:1,ascii:!0},3:{getValue:function(a,b,c){return a.getUint16(b,c)},size:2},4:{getValue:function(a,b,c){return a.getUint32(b,c)},size:4},5:{getValue:function(a,b,c){return a.getUint32(b,c)/a.getUint32(b+4,c)},size:8},9:{getValue:function(a,b,c){return a.getInt32(b,c)},size:4},10:{getValue:function(a,b,c){return a.getInt32(b,c)/a.getInt32(b+4,c)},size:8}},a.exifTagTypes[7]=a.exifTagTypes[1],a.getExifValue=function(b,c,d,e,f,g){var h,i,j,k,l,m,n=a.exifTagTypes[e];if(!n)return void console.log("Invalid Exif data: Invalid tag type.");if(h=n.size*f,i=h>4?c+b.getUint32(d+8,g):d+8,i+h>b.byteLength)return void console.log("Invalid Exif data: Invalid data offset.");if(1===f)return n.getValue(b,i,g);for(j=[],k=0;f>k;k+=1)j[k]=n.getValue(b,i+k*n.size,g);if(n.ascii){for(l="",k=0;k<j.length&&(m=j[k],"\x00"!==m);k+=1)l+=m;return l}return j},a.parseExifTag=function(b,c,d,e,f){var g=b.getUint16(d,e);f.exif[g]=a.getExifValue(b,c,d,b.getUint16(d+2,e),b.getUint32(d+4,e),e)},a.parseExifTags=function(a,b,c,d,e){var f,g,h;if(c+6>a.byteLength)return void console.log("Invalid Exif data: Invalid directory offset.");if(f=a.getUint16(c,d),g=c+2+12*f,g+4>a.byteLength)return void console.log("Invalid Exif data: Invalid directory size.");for(h=0;f>h;h+=1)this.parseExifTag(a,b,c+2+12*h,d,e);return a.getUint32(g,d)},a.parseExifData=function(b,c,d,e,f){if(!f.disableExif){var g,h,i,j=c+10;if(1165519206===b.getUint32(c+4)){if(j+8>b.byteLength)return void console.log("Invalid Exif data: Invalid segment size.");if(0!==b.getUint16(c+8))return void console.log("Invalid Exif data: Missing byte alignment offset.");switch(b.getUint16(j)){case 18761:g=!0;break;case 19789:g=!1;break;default:return void console.log("Invalid Exif data: Invalid byte alignment marker.")}if(42!==b.getUint16(j+2,g))return void console.log("Invalid Exif data: Missing TIFF marker.");h=b.getUint32(j+4,g),e.exif=new a.ExifMap,h=a.parseExifTags(b,j,j+h,g,e),h&&!f.disableExifThumbnail&&(i={exif:{}},h=a.parseExifTags(b,j,j+h,g,i),i.exif[513]&&(e.exif.Thumbnail=a.getExifThumbnail(b,j+i.exif[513],i.exif[514]))),e.exif[34665]&&!f.disableExifSub&&a.parseExifTags(b,j,j+e.exif[34665],g,e),e.exif[34853]&&!f.disableExifGps&&a.parseExifTags(b,j,j+e.exif[34853],g,e)}}},a.metaDataParsers.jpeg[65505].push(a.parseExifData)}),function(a){"use strict";"function"==typeof define&&define.amd?define(["load-image","load-image-exif"],a):a(window.loadImage)}(function(a){"use strict";a.ExifMap.prototype.tags={256:"ImageWidth",257:"ImageHeight",34665:"ExifIFDPointer",34853:"GPSInfoIFDPointer",40965:"InteroperabilityIFDPointer",258:"BitsPerSample",259:"Compression",262:"PhotometricInterpretation",274:"Orientation",277:"SamplesPerPixel",284:"PlanarConfiguration",530:"YCbCrSubSampling",531:"YCbCrPositioning",282:"XResolution",283:"YResolution",296:"ResolutionUnit",273:"StripOffsets",278:"RowsPerStrip",279:"StripByteCounts",513:"JPEGInterchangeFormat",514:"JPEGInterchangeFormatLength",301:"TransferFunction",318:"WhitePoint",319:"PrimaryChromaticities",529:"YCbCrCoefficients",532:"ReferenceBlackWhite",306:"DateTime",270:"ImageDescription",271:"Make",272:"Model",305:"Software",315:"Artist",33432:"Copyright",36864:"ExifVersion",40960:"FlashpixVersion",40961:"ColorSpace",40962:"PixelXDimension",40963:"PixelYDimension",42240:"Gamma",37121:"ComponentsConfiguration",37122:"CompressedBitsPerPixel",37500:"MakerNote",37510:"UserComment",40964:"RelatedSoundFile",36867:"DateTimeOriginal",36868:"DateTimeDigitized",37520:"SubSecTime",37521:"SubSecTimeOriginal",37522:"SubSecTimeDigitized",33434:"ExposureTime",33437:"FNumber",34850:"ExposureProgram",34852:"SpectralSensitivity",34855:"PhotographicSensitivity",34856:"OECF",34864:"SensitivityType",34865:"StandardOutputSensitivity",34866:"RecommendedExposureIndex",34867:"ISOSpeed",34868:"ISOSpeedLatitudeyyy",34869:"ISOSpeedLatitudezzz",37377:"ShutterSpeedValue",37378:"ApertureValue",37379:"BrightnessValue",37380:"ExposureBias",37381:"MaxApertureValue",37382:"SubjectDistance",37383:"MeteringMode",37384:"LightSource",37385:"Flash",37396:"SubjectArea",37386:"FocalLength",41483:"FlashEnergy",41484:"SpatialFrequencyResponse",41486:"FocalPlaneXResolution",41487:"FocalPlaneYResolution",41488:"FocalPlaneResolutionUnit",41492:"SubjectLocation",41493:"ExposureIndex",41495:"SensingMethod",41728:"FileSource",41729:"SceneType",41730:"CFAPattern",41985:"CustomRendered",41986:"ExposureMode",41987:"WhiteBalance",41988:"DigitalZoomRatio",41989:"FocalLengthIn35mmFilm",41990:"SceneCaptureType",41991:"GainControl",41992:"Contrast",41993:"Saturation",41994:"Sharpness",41995:"DeviceSettingDescription",41996:"SubjectDistanceRange",42016:"ImageUniqueID",42032:"CameraOwnerName",42033:"BodySerialNumber",42034:"LensSpecification",42035:"LensMake",42036:"LensModel",42037:"LensSerialNumber",0:"GPSVersionID",1:"GPSLatitudeRef",2:"GPSLatitude",3:"GPSLongitudeRef",4:"GPSLongitude",5:"GPSAltitudeRef",6:"GPSAltitude",7:"GPSTimeStamp",8:"GPSSatellites",9:"GPSStatus",10:"GPSMeasureMode",11:"GPSDOP",12:"GPSSpeedRef",13:"GPSSpeed",14:"GPSTrackRef",15:"GPSTrack",16:"GPSImgDirectionRef",17:"GPSImgDirection",18:"GPSMapDatum",19:"GPSDestLatitudeRef",20:"GPSDestLatitude",21:"GPSDestLongitudeRef",22:"GPSDestLongitude",23:"GPSDestBearingRef",24:"GPSDestBearing",25:"GPSDestDistanceRef",26:"GPSDestDistance",27:"GPSProcessingMethod",28:"GPSAreaInformation",29:"GPSDateStamp",30:"GPSDifferential",31:"GPSHPositioningError"},a.ExifMap.prototype.stringValues={ExposureProgram:{0:"Undefined",1:"Manual",2:"Normal program",3:"Aperture priority",4:"Shutter priority",5:"Creative program",6:"Action program",7:"Portrait mode",8:"Landscape mode"},MeteringMode:{0:"Unknown",1:"Average",2:"CenterWeightedAverage",3:"Spot",4:"MultiSpot",5:"Pattern",6:"Partial",255:"Other"},LightSource:{0:"Unknown",1:"Daylight",2:"Fluorescent",3:"Tungsten (incandescent light)",4:"Flash",9:"Fine weather",10:"Cloudy weather",11:"Shade",12:"Daylight fluorescent (D 5700 - 7100K)",13:"Day white fluorescent (N 4600 - 5400K)",14:"Cool white fluorescent (W 3900 - 4500K)",15:"White fluorescent (WW 3200 - 3700K)",17:"Standard light A",18:"Standard light B",19:"Standard light C",20:"D55",21:"D65",22:"D75",23:"D50",24:"ISO studio tungsten",255:"Other"},Flash:{0:"Flash did not fire",1:"Flash fired",5:"Strobe return light not detected",7:"Strobe return light detected",9:"Flash fired, compulsory flash mode",13:"Flash fired, compulsory flash mode, return light not detected",15:"Flash fired, compulsory flash mode, return light detected",16:"Flash did not fire, compulsory flash mode",24:"Flash did not fire, auto mode",25:"Flash fired, auto mode",29:"Flash fired, auto mode, return light not detected",31:"Flash fired, auto mode, return light detected",32:"No flash function",65:"Flash fired, red-eye reduction mode",69:"Flash fired, red-eye reduction mode, return light not detected",71:"Flash fired, red-eye reduction mode, return light detected",73:"Flash fired, compulsory flash mode, red-eye reduction mode",77:"Flash fired, compulsory flash mode, red-eye reduction mode, return light not detected",79:"Flash fired, compulsory flash mode, red-eye reduction mode, return light detected",89:"Flash fired, auto mode, red-eye reduction mode",93:"Flash fired, auto mode, return light not detected, red-eye reduction mode",95:"Flash fired, auto mode, return light detected, red-eye reduction mode"},SensingMethod:{1:"Undefined",2:"One-chip color area sensor",3:"Two-chip color area sensor",4:"Three-chip color area sensor",5:"Color sequential area sensor",7:"Trilinear sensor",8:"Color sequential linear sensor"},SceneCaptureType:{0:"Standard",1:"Landscape",2:"Portrait",3:"Night scene"},SceneType:{1:"Directly photographed"},CustomRendered:{0:"Normal process",1:"Custom process"},WhiteBalance:{0:"Auto white balance",1:"Manual white balance"},GainControl:{0:"None",1:"Low gain up",2:"High gain up",3:"Low gain down",4:"High gain down"},Contrast:{0:"Normal",1:"Soft",2:"Hard"},Saturation:{0:"Normal",1:"Low saturation",2:"High saturation"},Sharpness:{0:"Normal",1:"Soft",2:"Hard"},SubjectDistanceRange:{0:"Unknown",1:"Macro",2:"Close view",3:"Distant view"},FileSource:{3:"DSC"},ComponentsConfiguration:{0:"",1:"Y",2:"Cb",3:"Cr",4:"R",5:"G",6:"B"},Orientation:{1:"top-left",2:"top-right",3:"bottom-right",4:"bottom-left",5:"left-top",6:"right-top",7:"right-bottom",8:"left-bottom"}},a.ExifMap.prototype.getText=function(a){var b=this.get(a);switch(a){case"LightSource":case"Flash":case"MeteringMode":case"ExposureProgram":case"SensingMethod":case"SceneCaptureType":case"SceneType":case"CustomRendered":case"WhiteBalance":case"GainControl":case"Contrast":case"Saturation":case"Sharpness":case"SubjectDistanceRange":case"FileSource":case"Orientation":return this.stringValues[a][b];case"ExifVersion":case"FlashpixVersion":return String.fromCharCode(b[0],b[1],b[2],b[3]);case"ComponentsConfiguration":return this.stringValues[a][b[0]]+this.stringValues[a][b[1]]+this.stringValues[a][b[2]]+this.stringValues[a][b[3]];case"GPSVersionID":return b[0]+"."+b[1]+"."+b[2]+"."+b[3]}return String(b)},function(a){var b,c=a.tags,d=a.map;for(b in c)c.hasOwnProperty(b)&&(d[c[b]]=b)}(a.ExifMap.prototype),a.ExifMap.prototype.getAll=function(){var a,b,c={};for(a in this)this.hasOwnProperty(a)&&(b=this.tags[a],b&&(c[b]=this.getText(b)));return c}});
 /*!
  * jQuery Validation Plugin v1.13.1
  *
@@ -34904,6 +39848,1693 @@ $.validator.addMethod("ziprange", function(value, element) {
 }, "Your ZIP-code must be in the range 902xx-xxxx to 905xx-xxxx");
 
 }));
+/*
+ * jQuery Iframe Transport Plugin 1.8.3
+ * https://github.com/blueimp/jQuery-File-Upload
+ *
+ * Copyright 2011, Sebastian Tschan
+ * https://blueimp.net
+ *
+ * Licensed under the MIT license:
+ * http://www.opensource.org/licenses/MIT
+ */
+
+/* global define, require, window, document */
+
+(function (factory) {
+    'use strict';
+    if (typeof define === 'function' && define.amd) {
+        // Register as an anonymous AMD module:
+        define(['jquery'], factory);
+    } else if (typeof exports === 'object') {
+        // Node/CommonJS:
+        factory(require('jquery'));
+    } else {
+        // Browser globals:
+        factory(window.jQuery);
+    }
+}(function ($) {
+    'use strict';
+
+    // Helper variable to create unique names for the transport iframes:
+    var counter = 0;
+
+    // The iframe transport accepts four additional options:
+    // options.fileInput: a jQuery collection of file input fields
+    // options.paramName: the parameter name for the file form data,
+    //  overrides the name property of the file input field(s),
+    //  can be a string or an array of strings.
+    // options.formData: an array of objects with name and value properties,
+    //  equivalent to the return data of .serializeArray(), e.g.:
+    //  [{name: 'a', value: 1}, {name: 'b', value: 2}]
+    // options.initialIframeSrc: the URL of the initial iframe src,
+    //  by default set to "javascript:false;"
+    $.ajaxTransport('iframe', function (options) {
+        if (options.async) {
+            // javascript:false as initial iframe src
+            // prevents warning popups on HTTPS in IE6:
+            /*jshint scripturl: true */
+            var initialIframeSrc = options.initialIframeSrc || 'javascript:false;',
+            /*jshint scripturl: false */
+                form,
+                iframe,
+                addParamChar;
+            return {
+                send: function (_, completeCallback) {
+                    form = $('<form style="display:none;"></form>');
+                    form.attr('accept-charset', options.formAcceptCharset);
+                    addParamChar = /\?/.test(options.url) ? '&' : '?';
+                    // XDomainRequest only supports GET and POST:
+                    if (options.type === 'DELETE') {
+                        options.url = options.url + addParamChar + '_method=DELETE';
+                        options.type = 'POST';
+                    } else if (options.type === 'PUT') {
+                        options.url = options.url + addParamChar + '_method=PUT';
+                        options.type = 'POST';
+                    } else if (options.type === 'PATCH') {
+                        options.url = options.url + addParamChar + '_method=PATCH';
+                        options.type = 'POST';
+                    }
+                    // IE versions below IE8 cannot set the name property of
+                    // elements that have already been added to the DOM,
+                    // so we set the name along with the iframe HTML markup:
+                    counter += 1;
+                    iframe = $(
+                        '<iframe src="' + initialIframeSrc +
+                            '" name="iframe-transport-' + counter + '"></iframe>'
+                    ).bind('load', function () {
+                        var fileInputClones,
+                            paramNames = $.isArray(options.paramName) ?
+                                    options.paramName : [options.paramName];
+                        iframe
+                            .unbind('load')
+                            .bind('load', function () {
+                                var response;
+                                // Wrap in a try/catch block to catch exceptions thrown
+                                // when trying to access cross-domain iframe contents:
+                                try {
+                                    response = iframe.contents();
+                                    // Google Chrome and Firefox do not throw an
+                                    // exception when calling iframe.contents() on
+                                    // cross-domain requests, so we unify the response:
+                                    if (!response.length || !response[0].firstChild) {
+                                        throw new Error();
+                                    }
+                                } catch (e) {
+                                    response = undefined;
+                                }
+                                // The complete callback returns the
+                                // iframe content document as response object:
+                                completeCallback(
+                                    200,
+                                    'success',
+                                    {'iframe': response}
+                                );
+                                // Fix for IE endless progress bar activity bug
+                                // (happens on form submits to iframe targets):
+                                $('<iframe src="' + initialIframeSrc + '"></iframe>')
+                                    .appendTo(form);
+                                window.setTimeout(function () {
+                                    // Removing the form in a setTimeout call
+                                    // allows Chrome's developer tools to display
+                                    // the response result
+                                    form.remove();
+                                }, 0);
+                            });
+                        form
+                            .prop('target', iframe.prop('name'))
+                            .prop('action', options.url)
+                            .prop('method', options.type);
+                        if (options.formData) {
+                            $.each(options.formData, function (index, field) {
+                                $('<input type="hidden"/>')
+                                    .prop('name', field.name)
+                                    .val(field.value)
+                                    .appendTo(form);
+                            });
+                        }
+                        if (options.fileInput && options.fileInput.length &&
+                                options.type === 'POST') {
+                            fileInputClones = options.fileInput.clone();
+                            // Insert a clone for each file input field:
+                            options.fileInput.after(function (index) {
+                                return fileInputClones[index];
+                            });
+                            if (options.paramName) {
+                                options.fileInput.each(function (index) {
+                                    $(this).prop(
+                                        'name',
+                                        paramNames[index] || options.paramName
+                                    );
+                                });
+                            }
+                            // Appending the file input fields to the hidden form
+                            // removes them from their original location:
+                            form
+                                .append(options.fileInput)
+                                .prop('enctype', 'multipart/form-data')
+                                // enctype must be set as encoding for IE:
+                                .prop('encoding', 'multipart/form-data');
+                            // Remove the HTML5 form attribute from the input(s):
+                            options.fileInput.removeAttr('form');
+                        }
+                        form.submit();
+                        // Insert the file input fields at their original location
+                        // by replacing the clones with the originals:
+                        if (fileInputClones && fileInputClones.length) {
+                            options.fileInput.each(function (index, input) {
+                                var clone = $(fileInputClones[index]);
+                                // Restore the original name and form properties:
+                                $(input)
+                                    .prop('name', clone.prop('name'))
+                                    .attr('form', clone.attr('form'));
+                                clone.replaceWith(input);
+                            });
+                        }
+                    });
+                    form.append(iframe).appendTo(document.body);
+                },
+                abort: function () {
+                    if (iframe) {
+                        // javascript:false as iframe src aborts the request
+                        // and prevents warning popups on HTTPS in IE6.
+                        // concat is used to avoid the "Script URL" JSLint error:
+                        iframe
+                            .unbind('load')
+                            .prop('src', initialIframeSrc);
+                    }
+                    if (form) {
+                        form.remove();
+                    }
+                }
+            };
+        }
+    });
+
+    // The iframe transport returns the iframe content document as response.
+    // The following adds converters from iframe to text, json, html, xml
+    // and script.
+    // Please note that the Content-Type for JSON responses has to be text/plain
+    // or text/html, if the browser doesn't include application/json in the
+    // Accept header, else IE will show a download dialog.
+    // The Content-Type for XML responses on the other hand has to be always
+    // application/xml or text/xml, so IE properly parses the XML response.
+    // See also
+    // https://github.com/blueimp/jQuery-File-Upload/wiki/Setup#content-type-negotiation
+    $.ajaxSetup({
+        converters: {
+            'iframe text': function (iframe) {
+                return iframe && $(iframe[0].body).text();
+            },
+            'iframe json': function (iframe) {
+                return iframe && $.parseJSON($(iframe[0].body).text());
+            },
+            'iframe html': function (iframe) {
+                return iframe && $(iframe[0].body).html();
+            },
+            'iframe xml': function (iframe) {
+                var xmlDoc = iframe && iframe[0];
+                return xmlDoc && $.isXMLDoc(xmlDoc) ? xmlDoc :
+                        $.parseXML((xmlDoc.XMLDocument && xmlDoc.XMLDocument.xml) ||
+                            $(xmlDoc.body).html());
+            },
+            'iframe script': function (iframe) {
+                return iframe && $.globalEval($(iframe[0].body).text());
+            }
+        }
+    });
+
+}));
+
+/*
+ * jQuery File Upload Plugin 5.42.3
+ * https://github.com/blueimp/jQuery-File-Upload
+ *
+ * Copyright 2010, Sebastian Tschan
+ * https://blueimp.net
+ *
+ * Licensed under the MIT license:
+ * http://www.opensource.org/licenses/MIT
+ */
+
+/* jshint nomen:false */
+/* global define, require, window, document, location, Blob, FormData */
+
+(function (factory) {
+    'use strict';
+    if (typeof define === 'function' && define.amd) {
+        // Register as an anonymous AMD module:
+        define([
+            'jquery',
+            'jquery.ui.widget'
+        ], factory);
+    } else if (typeof exports === 'object') {
+        // Node/CommonJS:
+        factory(
+            require('jquery'),
+            require('./vendor/jquery.ui.widget')
+        );
+    } else {
+        // Browser globals:
+        factory(window.jQuery);
+    }
+}(function ($) {
+    'use strict';
+
+    // Detect file input support, based on
+    // http://viljamis.com/blog/2012/file-upload-support-on-mobile/
+    $.support.fileInput = !(new RegExp(
+        // Handle devices which give false positives for the feature detection:
+        '(Android (1\\.[0156]|2\\.[01]))' +
+            '|(Windows Phone (OS 7|8\\.0))|(XBLWP)|(ZuneWP)|(WPDesktop)' +
+            '|(w(eb)?OSBrowser)|(webOS)' +
+            '|(Kindle/(1\\.0|2\\.[05]|3\\.0))'
+    ).test(window.navigator.userAgent) ||
+        // Feature detection for all other devices:
+        $('<input type="file">').prop('disabled'));
+
+    // The FileReader API is not actually used, but works as feature detection,
+    // as some Safari versions (5?) support XHR file uploads via the FormData API,
+    // but not non-multipart XHR file uploads.
+    // window.XMLHttpRequestUpload is not available on IE10, so we check for
+    // window.ProgressEvent instead to detect XHR2 file upload capability:
+    $.support.xhrFileUpload = !!(window.ProgressEvent && window.FileReader);
+    $.support.xhrFormDataFileUpload = !!window.FormData;
+
+    // Detect support for Blob slicing (required for chunked uploads):
+    $.support.blobSlice = window.Blob && (Blob.prototype.slice ||
+        Blob.prototype.webkitSlice || Blob.prototype.mozSlice);
+
+    // Helper function to create drag handlers for dragover/dragenter/dragleave:
+    function getDragHandler(type) {
+        var isDragOver = type === 'dragover';
+        return function (e) {
+            e.dataTransfer = e.originalEvent && e.originalEvent.dataTransfer;
+            var dataTransfer = e.dataTransfer;
+            if (dataTransfer && $.inArray('Files', dataTransfer.types) !== -1 &&
+                    this._trigger(
+                        type,
+                        $.Event(type, {delegatedEvent: e})
+                    ) !== false) {
+                e.preventDefault();
+                if (isDragOver) {
+                    dataTransfer.dropEffect = 'copy';
+                }
+            }
+        };
+    }
+
+    // The fileupload widget listens for change events on file input fields defined
+    // via fileInput setting and paste or drop events of the given dropZone.
+    // In addition to the default jQuery Widget methods, the fileupload widget
+    // exposes the "add" and "send" methods, to add or directly send files using
+    // the fileupload API.
+    // By default, files added via file input selection, paste, drag & drop or
+    // "add" method are uploaded immediately, but it is possible to override
+    // the "add" callback option to queue file uploads.
+    $.widget('blueimp.fileupload', {
+
+        options: {
+            // The drop target element(s), by the default the complete document.
+            // Set to null to disable drag & drop support:
+            dropZone: $(document),
+            // The paste target element(s), by the default undefined.
+            // Set to a DOM node or jQuery object to enable file pasting:
+            pasteZone: undefined,
+            // The file input field(s), that are listened to for change events.
+            // If undefined, it is set to the file input fields inside
+            // of the widget element on plugin initialization.
+            // Set to null to disable the change listener.
+            fileInput: undefined,
+            // By default, the file input field is replaced with a clone after
+            // each input field change event. This is required for iframe transport
+            // queues and allows change events to be fired for the same file
+            // selection, but can be disabled by setting the following option to false:
+            replaceFileInput: true,
+            // The parameter name for the file form data (the request argument name).
+            // If undefined or empty, the name property of the file input field is
+            // used, or "files[]" if the file input name property is also empty,
+            // can be a string or an array of strings:
+            paramName: undefined,
+            // By default, each file of a selection is uploaded using an individual
+            // request for XHR type uploads. Set to false to upload file
+            // selections in one request each:
+            singleFileUploads: true,
+            // To limit the number of files uploaded with one XHR request,
+            // set the following option to an integer greater than 0:
+            limitMultiFileUploads: undefined,
+            // The following option limits the number of files uploaded with one
+            // XHR request to keep the request size under or equal to the defined
+            // limit in bytes:
+            limitMultiFileUploadSize: undefined,
+            // Multipart file uploads add a number of bytes to each uploaded file,
+            // therefore the following option adds an overhead for each file used
+            // in the limitMultiFileUploadSize configuration:
+            limitMultiFileUploadSizeOverhead: 512,
+            // Set the following option to true to issue all file upload requests
+            // in a sequential order:
+            sequentialUploads: false,
+            // To limit the number of concurrent uploads,
+            // set the following option to an integer greater than 0:
+            limitConcurrentUploads: undefined,
+            // Set the following option to true to force iframe transport uploads:
+            forceIframeTransport: false,
+            // Set the following option to the location of a redirect url on the
+            // origin server, for cross-domain iframe transport uploads:
+            redirect: undefined,
+            // The parameter name for the redirect url, sent as part of the form
+            // data and set to 'redirect' if this option is empty:
+            redirectParamName: undefined,
+            // Set the following option to the location of a postMessage window,
+            // to enable postMessage transport uploads:
+            postMessage: undefined,
+            // By default, XHR file uploads are sent as multipart/form-data.
+            // The iframe transport is always using multipart/form-data.
+            // Set to false to enable non-multipart XHR uploads:
+            multipart: true,
+            // To upload large files in smaller chunks, set the following option
+            // to a preferred maximum chunk size. If set to 0, null or undefined,
+            // or the browser does not support the required Blob API, files will
+            // be uploaded as a whole.
+            maxChunkSize: undefined,
+            // When a non-multipart upload or a chunked multipart upload has been
+            // aborted, this option can be used to resume the upload by setting
+            // it to the size of the already uploaded bytes. This option is most
+            // useful when modifying the options object inside of the "add" or
+            // "send" callbacks, as the options are cloned for each file upload.
+            uploadedBytes: undefined,
+            // By default, failed (abort or error) file uploads are removed from the
+            // global progress calculation. Set the following option to false to
+            // prevent recalculating the global progress data:
+            recalculateProgress: true,
+            // Interval in milliseconds to calculate and trigger progress events:
+            progressInterval: 100,
+            // Interval in milliseconds to calculate progress bitrate:
+            bitrateInterval: 500,
+            // By default, uploads are started automatically when adding files:
+            autoUpload: true,
+
+            // Error and info messages:
+            messages: {
+                uploadedBytes: 'Uploaded bytes exceed file size'
+            },
+
+            // Translation function, gets the message key to be translated
+            // and an object with context specific data as arguments:
+            i18n: function (message, context) {
+                message = this.messages[message] || message.toString();
+                if (context) {
+                    $.each(context, function (key, value) {
+                        message = message.replace('{' + key + '}', value);
+                    });
+                }
+                return message;
+            },
+
+            // Additional form data to be sent along with the file uploads can be set
+            // using this option, which accepts an array of objects with name and
+            // value properties, a function returning such an array, a FormData
+            // object (for XHR file uploads), or a simple object.
+            // The form of the first fileInput is given as parameter to the function:
+            formData: function (form) {
+                return form.serializeArray();
+            },
+
+            // The add callback is invoked as soon as files are added to the fileupload
+            // widget (via file input selection, drag & drop, paste or add API call).
+            // If the singleFileUploads option is enabled, this callback will be
+            // called once for each file in the selection for XHR file uploads, else
+            // once for each file selection.
+            //
+            // The upload starts when the submit method is invoked on the data parameter.
+            // The data object contains a files property holding the added files
+            // and allows you to override plugin options as well as define ajax settings.
+            //
+            // Listeners for this callback can also be bound the following way:
+            // .bind('fileuploadadd', func);
+            //
+            // data.submit() returns a Promise object and allows to attach additional
+            // handlers using jQuery's Deferred callbacks:
+            // data.submit().done(func).fail(func).always(func);
+            add: function (e, data) {
+                if (e.isDefaultPrevented()) {
+                    return false;
+                }
+                if (data.autoUpload || (data.autoUpload !== false &&
+                        $(this).fileupload('option', 'autoUpload'))) {
+                    data.process().done(function () {
+                        data.submit();
+                    });
+                }
+            },
+
+            // Other callbacks:
+
+            // Callback for the submit event of each file upload:
+            // submit: function (e, data) {}, // .bind('fileuploadsubmit', func);
+
+            // Callback for the start of each file upload request:
+            // send: function (e, data) {}, // .bind('fileuploadsend', func);
+
+            // Callback for successful uploads:
+            // done: function (e, data) {}, // .bind('fileuploaddone', func);
+
+            // Callback for failed (abort or error) uploads:
+            // fail: function (e, data) {}, // .bind('fileuploadfail', func);
+
+            // Callback for completed (success, abort or error) requests:
+            // always: function (e, data) {}, // .bind('fileuploadalways', func);
+
+            // Callback for upload progress events:
+            // progress: function (e, data) {}, // .bind('fileuploadprogress', func);
+
+            // Callback for global upload progress events:
+            // progressall: function (e, data) {}, // .bind('fileuploadprogressall', func);
+
+            // Callback for uploads start, equivalent to the global ajaxStart event:
+            // start: function (e) {}, // .bind('fileuploadstart', func);
+
+            // Callback for uploads stop, equivalent to the global ajaxStop event:
+            // stop: function (e) {}, // .bind('fileuploadstop', func);
+
+            // Callback for change events of the fileInput(s):
+            // change: function (e, data) {}, // .bind('fileuploadchange', func);
+
+            // Callback for paste events to the pasteZone(s):
+            // paste: function (e, data) {}, // .bind('fileuploadpaste', func);
+
+            // Callback for drop events of the dropZone(s):
+            // drop: function (e, data) {}, // .bind('fileuploaddrop', func);
+
+            // Callback for dragover events of the dropZone(s):
+            // dragover: function (e) {}, // .bind('fileuploaddragover', func);
+
+            // Callback for the start of each chunk upload request:
+            // chunksend: function (e, data) {}, // .bind('fileuploadchunksend', func);
+
+            // Callback for successful chunk uploads:
+            // chunkdone: function (e, data) {}, // .bind('fileuploadchunkdone', func);
+
+            // Callback for failed (abort or error) chunk uploads:
+            // chunkfail: function (e, data) {}, // .bind('fileuploadchunkfail', func);
+
+            // Callback for completed (success, abort or error) chunk upload requests:
+            // chunkalways: function (e, data) {}, // .bind('fileuploadchunkalways', func);
+
+            // The plugin options are used as settings object for the ajax calls.
+            // The following are jQuery ajax settings required for the file uploads:
+            processData: false,
+            contentType: false,
+            cache: false,
+            timeout: 0
+        },
+
+        // A list of options that require reinitializing event listeners and/or
+        // special initialization code:
+        _specialOptions: [
+            'fileInput',
+            'dropZone',
+            'pasteZone',
+            'multipart',
+            'forceIframeTransport'
+        ],
+
+        _blobSlice: $.support.blobSlice && function () {
+            var slice = this.slice || this.webkitSlice || this.mozSlice;
+            return slice.apply(this, arguments);
+        },
+
+        _BitrateTimer: function () {
+            this.timestamp = ((Date.now) ? Date.now() : (new Date()).getTime());
+            this.loaded = 0;
+            this.bitrate = 0;
+            this.getBitrate = function (now, loaded, interval) {
+                var timeDiff = now - this.timestamp;
+                if (!this.bitrate || !interval || timeDiff > interval) {
+                    this.bitrate = (loaded - this.loaded) * (1000 / timeDiff) * 8;
+                    this.loaded = loaded;
+                    this.timestamp = now;
+                }
+                return this.bitrate;
+            };
+        },
+
+        _isXHRUpload: function (options) {
+            return !options.forceIframeTransport &&
+                ((!options.multipart && $.support.xhrFileUpload) ||
+                $.support.xhrFormDataFileUpload);
+        },
+
+        _getFormData: function (options) {
+            var formData;
+            if ($.type(options.formData) === 'function') {
+                return options.formData(options.form);
+            }
+            if ($.isArray(options.formData)) {
+                return options.formData;
+            }
+            if ($.type(options.formData) === 'object') {
+                formData = [];
+                $.each(options.formData, function (name, value) {
+                    formData.push({name: name, value: value});
+                });
+                return formData;
+            }
+            return [];
+        },
+
+        _getTotal: function (files) {
+            var total = 0;
+            $.each(files, function (index, file) {
+                total += file.size || 1;
+            });
+            return total;
+        },
+
+        _initProgressObject: function (obj) {
+            var progress = {
+                loaded: 0,
+                total: 0,
+                bitrate: 0
+            };
+            if (obj._progress) {
+                $.extend(obj._progress, progress);
+            } else {
+                obj._progress = progress;
+            }
+        },
+
+        _initResponseObject: function (obj) {
+            var prop;
+            if (obj._response) {
+                for (prop in obj._response) {
+                    if (obj._response.hasOwnProperty(prop)) {
+                        delete obj._response[prop];
+                    }
+                }
+            } else {
+                obj._response = {};
+            }
+        },
+
+        _onProgress: function (e, data) {
+            if (e.lengthComputable) {
+                var now = ((Date.now) ? Date.now() : (new Date()).getTime()),
+                    loaded;
+                if (data._time && data.progressInterval &&
+                        (now - data._time < data.progressInterval) &&
+                        e.loaded !== e.total) {
+                    return;
+                }
+                data._time = now;
+                loaded = Math.floor(
+                    e.loaded / e.total * (data.chunkSize || data._progress.total)
+                ) + (data.uploadedBytes || 0);
+                // Add the difference from the previously loaded state
+                // to the global loaded counter:
+                this._progress.loaded += (loaded - data._progress.loaded);
+                this._progress.bitrate = this._bitrateTimer.getBitrate(
+                    now,
+                    this._progress.loaded,
+                    data.bitrateInterval
+                );
+                data._progress.loaded = data.loaded = loaded;
+                data._progress.bitrate = data.bitrate = data._bitrateTimer.getBitrate(
+                    now,
+                    loaded,
+                    data.bitrateInterval
+                );
+                // Trigger a custom progress event with a total data property set
+                // to the file size(s) of the current upload and a loaded data
+                // property calculated accordingly:
+                this._trigger(
+                    'progress',
+                    $.Event('progress', {delegatedEvent: e}),
+                    data
+                );
+                // Trigger a global progress event for all current file uploads,
+                // including ajax calls queued for sequential file uploads:
+                this._trigger(
+                    'progressall',
+                    $.Event('progressall', {delegatedEvent: e}),
+                    this._progress
+                );
+            }
+        },
+
+        _initProgressListener: function (options) {
+            var that = this,
+                xhr = options.xhr ? options.xhr() : $.ajaxSettings.xhr();
+            // Accesss to the native XHR object is required to add event listeners
+            // for the upload progress event:
+            if (xhr.upload) {
+                $(xhr.upload).bind('progress', function (e) {
+                    var oe = e.originalEvent;
+                    // Make sure the progress event properties get copied over:
+                    e.lengthComputable = oe.lengthComputable;
+                    e.loaded = oe.loaded;
+                    e.total = oe.total;
+                    that._onProgress(e, options);
+                });
+                options.xhr = function () {
+                    return xhr;
+                };
+            }
+        },
+
+        _isInstanceOf: function (type, obj) {
+            // Cross-frame instanceof check
+            return Object.prototype.toString.call(obj) === '[object ' + type + ']';
+        },
+
+        _initXHRData: function (options) {
+            var that = this,
+                formData,
+                file = options.files[0],
+                // Ignore non-multipart setting if not supported:
+                multipart = options.multipart || !$.support.xhrFileUpload,
+                paramName = $.type(options.paramName) === 'array' ?
+                    options.paramName[0] : options.paramName;
+            options.headers = $.extend({}, options.headers);
+            if (options.contentRange) {
+                options.headers['Content-Range'] = options.contentRange;
+            }
+            if (!multipart || options.blob || !this._isInstanceOf('File', file)) {
+                options.headers['Content-Disposition'] = 'attachment; filename="' +
+                    encodeURI(file.name) + '"';
+            }
+            if (!multipart) {
+                options.contentType = file.type || 'application/octet-stream';
+                options.data = options.blob || file;
+            } else if ($.support.xhrFormDataFileUpload) {
+                if (options.postMessage) {
+                    // window.postMessage does not allow sending FormData
+                    // objects, so we just add the File/Blob objects to
+                    // the formData array and let the postMessage window
+                    // create the FormData object out of this array:
+                    formData = this._getFormData(options);
+                    if (options.blob) {
+                        formData.push({
+                            name: paramName,
+                            value: options.blob
+                        });
+                    } else {
+                        $.each(options.files, function (index, file) {
+                            formData.push({
+                                name: ($.type(options.paramName) === 'array' &&
+                                    options.paramName[index]) || paramName,
+                                value: file
+                            });
+                        });
+                    }
+                } else {
+                    if (that._isInstanceOf('FormData', options.formData)) {
+                        formData = options.formData;
+                    } else {
+                        formData = new FormData();
+                        $.each(this._getFormData(options), function (index, field) {
+                            formData.append(field.name, field.value);
+                        });
+                    }
+                    if (options.blob) {
+                        formData.append(paramName, options.blob, file.name);
+                    } else {
+                        $.each(options.files, function (index, file) {
+                            // This check allows the tests to run with
+                            // dummy objects:
+                            if (that._isInstanceOf('File', file) ||
+                                    that._isInstanceOf('Blob', file)) {
+                                formData.append(
+                                    ($.type(options.paramName) === 'array' &&
+                                        options.paramName[index]) || paramName,
+                                    file,
+                                    file.uploadName || file.name
+                                );
+                            }
+                        });
+                    }
+                }
+                options.data = formData;
+            }
+            // Blob reference is not needed anymore, free memory:
+            options.blob = null;
+        },
+
+        _initIframeSettings: function (options) {
+            var targetHost = $('<a></a>').prop('href', options.url).prop('host');
+            // Setting the dataType to iframe enables the iframe transport:
+            options.dataType = 'iframe ' + (options.dataType || '');
+            // The iframe transport accepts a serialized array as form data:
+            options.formData = this._getFormData(options);
+            // Add redirect url to form data on cross-domain uploads:
+            if (options.redirect && targetHost && targetHost !== location.host) {
+                options.formData.push({
+                    name: options.redirectParamName || 'redirect',
+                    value: options.redirect
+                });
+            }
+        },
+
+        _initDataSettings: function (options) {
+            if (this._isXHRUpload(options)) {
+                if (!this._chunkedUpload(options, true)) {
+                    if (!options.data) {
+                        this._initXHRData(options);
+                    }
+                    this._initProgressListener(options);
+                }
+                if (options.postMessage) {
+                    // Setting the dataType to postmessage enables the
+                    // postMessage transport:
+                    options.dataType = 'postmessage ' + (options.dataType || '');
+                }
+            } else {
+                this._initIframeSettings(options);
+            }
+        },
+
+        _getParamName: function (options) {
+            var fileInput = $(options.fileInput),
+                paramName = options.paramName;
+            if (!paramName) {
+                paramName = [];
+                fileInput.each(function () {
+                    var input = $(this),
+                        name = input.prop('name') || 'files[]',
+                        i = (input.prop('files') || [1]).length;
+                    while (i) {
+                        paramName.push(name);
+                        i -= 1;
+                    }
+                });
+                if (!paramName.length) {
+                    paramName = [fileInput.prop('name') || 'files[]'];
+                }
+            } else if (!$.isArray(paramName)) {
+                paramName = [paramName];
+            }
+            return paramName;
+        },
+
+        _initFormSettings: function (options) {
+            // Retrieve missing options from the input field and the
+            // associated form, if available:
+            if (!options.form || !options.form.length) {
+                options.form = $(options.fileInput.prop('form'));
+                // If the given file input doesn't have an associated form,
+                // use the default widget file input's form:
+                if (!options.form.length) {
+                    options.form = $(this.options.fileInput.prop('form'));
+                }
+            }
+            options.paramName = this._getParamName(options);
+            if (!options.url) {
+                options.url = options.form.prop('action') || location.href;
+            }
+            // The HTTP request method must be "POST" or "PUT":
+            options.type = (options.type ||
+                ($.type(options.form.prop('method')) === 'string' &&
+                    options.form.prop('method')) || ''
+                ).toUpperCase();
+            if (options.type !== 'POST' && options.type !== 'PUT' &&
+                    options.type !== 'PATCH') {
+                options.type = 'POST';
+            }
+            if (!options.formAcceptCharset) {
+                options.formAcceptCharset = options.form.attr('accept-charset');
+            }
+        },
+
+        _getAJAXSettings: function (data) {
+            var options = $.extend({}, this.options, data);
+            this._initFormSettings(options);
+            this._initDataSettings(options);
+            return options;
+        },
+
+        // jQuery 1.6 doesn't provide .state(),
+        // while jQuery 1.8+ removed .isRejected() and .isResolved():
+        _getDeferredState: function (deferred) {
+            if (deferred.state) {
+                return deferred.state();
+            }
+            if (deferred.isResolved()) {
+                return 'resolved';
+            }
+            if (deferred.isRejected()) {
+                return 'rejected';
+            }
+            return 'pending';
+        },
+
+        // Maps jqXHR callbacks to the equivalent
+        // methods of the given Promise object:
+        _enhancePromise: function (promise) {
+            promise.success = promise.done;
+            promise.error = promise.fail;
+            promise.complete = promise.always;
+            return promise;
+        },
+
+        // Creates and returns a Promise object enhanced with
+        // the jqXHR methods abort, success, error and complete:
+        _getXHRPromise: function (resolveOrReject, context, args) {
+            var dfd = $.Deferred(),
+                promise = dfd.promise();
+            context = context || this.options.context || promise;
+            if (resolveOrReject === true) {
+                dfd.resolveWith(context, args);
+            } else if (resolveOrReject === false) {
+                dfd.rejectWith(context, args);
+            }
+            promise.abort = dfd.promise;
+            return this._enhancePromise(promise);
+        },
+
+        // Adds convenience methods to the data callback argument:
+        _addConvenienceMethods: function (e, data) {
+            var that = this,
+                getPromise = function (args) {
+                    return $.Deferred().resolveWith(that, args).promise();
+                };
+            data.process = function (resolveFunc, rejectFunc) {
+                if (resolveFunc || rejectFunc) {
+                    data._processQueue = this._processQueue =
+                        (this._processQueue || getPromise([this])).pipe(
+                            function () {
+                                if (data.errorThrown) {
+                                    return $.Deferred()
+                                        .rejectWith(that, [data]).promise();
+                                }
+                                return getPromise(arguments);
+                            }
+                        ).pipe(resolveFunc, rejectFunc);
+                }
+                return this._processQueue || getPromise([this]);
+            };
+            data.submit = function () {
+                if (this.state() !== 'pending') {
+                    data.jqXHR = this.jqXHR =
+                        (that._trigger(
+                            'submit',
+                            $.Event('submit', {delegatedEvent: e}),
+                            this
+                        ) !== false) && that._onSend(e, this);
+                }
+                return this.jqXHR || that._getXHRPromise();
+            };
+            data.abort = function () {
+                if (this.jqXHR) {
+                    return this.jqXHR.abort();
+                }
+                this.errorThrown = 'abort';
+                that._trigger('fail', null, this);
+                return that._getXHRPromise(false);
+            };
+            data.state = function () {
+                if (this.jqXHR) {
+                    return that._getDeferredState(this.jqXHR);
+                }
+                if (this._processQueue) {
+                    return that._getDeferredState(this._processQueue);
+                }
+            };
+            data.processing = function () {
+                return !this.jqXHR && this._processQueue && that
+                    ._getDeferredState(this._processQueue) === 'pending';
+            };
+            data.progress = function () {
+                return this._progress;
+            };
+            data.response = function () {
+                return this._response;
+            };
+        },
+
+        // Parses the Range header from the server response
+        // and returns the uploaded bytes:
+        _getUploadedBytes: function (jqXHR) {
+            var range = jqXHR.getResponseHeader('Range'),
+                parts = range && range.split('-'),
+                upperBytesPos = parts && parts.length > 1 &&
+                    parseInt(parts[1], 10);
+            return upperBytesPos && upperBytesPos + 1;
+        },
+
+        // Uploads a file in multiple, sequential requests
+        // by splitting the file up in multiple blob chunks.
+        // If the second parameter is true, only tests if the file
+        // should be uploaded in chunks, but does not invoke any
+        // upload requests:
+        _chunkedUpload: function (options, testOnly) {
+            options.uploadedBytes = options.uploadedBytes || 0;
+            var that = this,
+                file = options.files[0],
+                fs = file.size,
+                ub = options.uploadedBytes,
+                mcs = options.maxChunkSize || fs,
+                slice = this._blobSlice,
+                dfd = $.Deferred(),
+                promise = dfd.promise(),
+                jqXHR,
+                upload;
+            if (!(this._isXHRUpload(options) && slice && (ub || mcs < fs)) ||
+                    options.data) {
+                return false;
+            }
+            if (testOnly) {
+                return true;
+            }
+            if (ub >= fs) {
+                file.error = options.i18n('uploadedBytes');
+                return this._getXHRPromise(
+                    false,
+                    options.context,
+                    [null, 'error', file.error]
+                );
+            }
+            // The chunk upload method:
+            upload = function () {
+                // Clone the options object for each chunk upload:
+                var o = $.extend({}, options),
+                    currentLoaded = o._progress.loaded;
+                o.blob = slice.call(
+                    file,
+                    ub,
+                    ub + mcs,
+                    file.type
+                );
+                // Store the current chunk size, as the blob itself
+                // will be dereferenced after data processing:
+                o.chunkSize = o.blob.size;
+                // Expose the chunk bytes position range:
+                o.contentRange = 'bytes ' + ub + '-' +
+                    (ub + o.chunkSize - 1) + '/' + fs;
+                // Process the upload data (the blob and potential form data):
+                that._initXHRData(o);
+                // Add progress listeners for this chunk upload:
+                that._initProgressListener(o);
+                jqXHR = ((that._trigger('chunksend', null, o) !== false && $.ajax(o)) ||
+                        that._getXHRPromise(false, o.context))
+                    .done(function (result, textStatus, jqXHR) {
+                        ub = that._getUploadedBytes(jqXHR) ||
+                            (ub + o.chunkSize);
+                        // Create a progress event if no final progress event
+                        // with loaded equaling total has been triggered
+                        // for this chunk:
+                        if (currentLoaded + o.chunkSize - o._progress.loaded) {
+                            that._onProgress($.Event('progress', {
+                                lengthComputable: true,
+                                loaded: ub - o.uploadedBytes,
+                                total: ub - o.uploadedBytes
+                            }), o);
+                        }
+                        options.uploadedBytes = o.uploadedBytes = ub;
+                        o.result = result;
+                        o.textStatus = textStatus;
+                        o.jqXHR = jqXHR;
+                        that._trigger('chunkdone', null, o);
+                        that._trigger('chunkalways', null, o);
+                        if (ub < fs) {
+                            // File upload not yet complete,
+                            // continue with the next chunk:
+                            upload();
+                        } else {
+                            dfd.resolveWith(
+                                o.context,
+                                [result, textStatus, jqXHR]
+                            );
+                        }
+                    })
+                    .fail(function (jqXHR, textStatus, errorThrown) {
+                        o.jqXHR = jqXHR;
+                        o.textStatus = textStatus;
+                        o.errorThrown = errorThrown;
+                        that._trigger('chunkfail', null, o);
+                        that._trigger('chunkalways', null, o);
+                        dfd.rejectWith(
+                            o.context,
+                            [jqXHR, textStatus, errorThrown]
+                        );
+                    });
+            };
+            this._enhancePromise(promise);
+            promise.abort = function () {
+                return jqXHR.abort();
+            };
+            upload();
+            return promise;
+        },
+
+        _beforeSend: function (e, data) {
+            if (this._active === 0) {
+                // the start callback is triggered when an upload starts
+                // and no other uploads are currently running,
+                // equivalent to the global ajaxStart event:
+                this._trigger('start');
+                // Set timer for global bitrate progress calculation:
+                this._bitrateTimer = new this._BitrateTimer();
+                // Reset the global progress values:
+                this._progress.loaded = this._progress.total = 0;
+                this._progress.bitrate = 0;
+            }
+            // Make sure the container objects for the .response() and
+            // .progress() methods on the data object are available
+            // and reset to their initial state:
+            this._initResponseObject(data);
+            this._initProgressObject(data);
+            data._progress.loaded = data.loaded = data.uploadedBytes || 0;
+            data._progress.total = data.total = this._getTotal(data.files) || 1;
+            data._progress.bitrate = data.bitrate = 0;
+            this._active += 1;
+            // Initialize the global progress values:
+            this._progress.loaded += data.loaded;
+            this._progress.total += data.total;
+        },
+
+        _onDone: function (result, textStatus, jqXHR, options) {
+            var total = options._progress.total,
+                response = options._response;
+            if (options._progress.loaded < total) {
+                // Create a progress event if no final progress event
+                // with loaded equaling total has been triggered:
+                this._onProgress($.Event('progress', {
+                    lengthComputable: true,
+                    loaded: total,
+                    total: total
+                }), options);
+            }
+            response.result = options.result = result;
+            response.textStatus = options.textStatus = textStatus;
+            response.jqXHR = options.jqXHR = jqXHR;
+            this._trigger('done', null, options);
+        },
+
+        _onFail: function (jqXHR, textStatus, errorThrown, options) {
+            var response = options._response;
+            if (options.recalculateProgress) {
+                // Remove the failed (error or abort) file upload from
+                // the global progress calculation:
+                this._progress.loaded -= options._progress.loaded;
+                this._progress.total -= options._progress.total;
+            }
+            response.jqXHR = options.jqXHR = jqXHR;
+            response.textStatus = options.textStatus = textStatus;
+            response.errorThrown = options.errorThrown = errorThrown;
+            this._trigger('fail', null, options);
+        },
+
+        _onAlways: function (jqXHRorResult, textStatus, jqXHRorError, options) {
+            // jqXHRorResult, textStatus and jqXHRorError are added to the
+            // options object via done and fail callbacks
+            this._trigger('always', null, options);
+        },
+
+        _onSend: function (e, data) {
+            if (!data.submit) {
+                this._addConvenienceMethods(e, data);
+            }
+            var that = this,
+                jqXHR,
+                aborted,
+                slot,
+                pipe,
+                options = that._getAJAXSettings(data),
+                send = function () {
+                    that._sending += 1;
+                    // Set timer for bitrate progress calculation:
+                    options._bitrateTimer = new that._BitrateTimer();
+                    jqXHR = jqXHR || (
+                        ((aborted || that._trigger(
+                            'send',
+                            $.Event('send', {delegatedEvent: e}),
+                            options
+                        ) === false) &&
+                        that._getXHRPromise(false, options.context, aborted)) ||
+                        that._chunkedUpload(options) || $.ajax(options)
+                    ).done(function (result, textStatus, jqXHR) {
+                        that._onDone(result, textStatus, jqXHR, options);
+                    }).fail(function (jqXHR, textStatus, errorThrown) {
+                        that._onFail(jqXHR, textStatus, errorThrown, options);
+                    }).always(function (jqXHRorResult, textStatus, jqXHRorError) {
+                        that._onAlways(
+                            jqXHRorResult,
+                            textStatus,
+                            jqXHRorError,
+                            options
+                        );
+                        that._sending -= 1;
+                        that._active -= 1;
+                        if (options.limitConcurrentUploads &&
+                                options.limitConcurrentUploads > that._sending) {
+                            // Start the next queued upload,
+                            // that has not been aborted:
+                            var nextSlot = that._slots.shift();
+                            while (nextSlot) {
+                                if (that._getDeferredState(nextSlot) === 'pending') {
+                                    nextSlot.resolve();
+                                    break;
+                                }
+                                nextSlot = that._slots.shift();
+                            }
+                        }
+                        if (that._active === 0) {
+                            // The stop callback is triggered when all uploads have
+                            // been completed, equivalent to the global ajaxStop event:
+                            that._trigger('stop');
+                        }
+                    });
+                    return jqXHR;
+                };
+            this._beforeSend(e, options);
+            if (this.options.sequentialUploads ||
+                    (this.options.limitConcurrentUploads &&
+                    this.options.limitConcurrentUploads <= this._sending)) {
+                if (this.options.limitConcurrentUploads > 1) {
+                    slot = $.Deferred();
+                    this._slots.push(slot);
+                    pipe = slot.pipe(send);
+                } else {
+                    this._sequence = this._sequence.pipe(send, send);
+                    pipe = this._sequence;
+                }
+                // Return the piped Promise object, enhanced with an abort method,
+                // which is delegated to the jqXHR object of the current upload,
+                // and jqXHR callbacks mapped to the equivalent Promise methods:
+                pipe.abort = function () {
+                    aborted = [undefined, 'abort', 'abort'];
+                    if (!jqXHR) {
+                        if (slot) {
+                            slot.rejectWith(options.context, aborted);
+                        }
+                        return send();
+                    }
+                    return jqXHR.abort();
+                };
+                return this._enhancePromise(pipe);
+            }
+            return send();
+        },
+
+        _onAdd: function (e, data) {
+            var that = this,
+                result = true,
+                options = $.extend({}, this.options, data),
+                files = data.files,
+                filesLength = files.length,
+                limit = options.limitMultiFileUploads,
+                limitSize = options.limitMultiFileUploadSize,
+                overhead = options.limitMultiFileUploadSizeOverhead,
+                batchSize = 0,
+                paramName = this._getParamName(options),
+                paramNameSet,
+                paramNameSlice,
+                fileSet,
+                i,
+                j = 0;
+            if (limitSize && (!filesLength || files[0].size === undefined)) {
+                limitSize = undefined;
+            }
+            if (!(options.singleFileUploads || limit || limitSize) ||
+                    !this._isXHRUpload(options)) {
+                fileSet = [files];
+                paramNameSet = [paramName];
+            } else if (!(options.singleFileUploads || limitSize) && limit) {
+                fileSet = [];
+                paramNameSet = [];
+                for (i = 0; i < filesLength; i += limit) {
+                    fileSet.push(files.slice(i, i + limit));
+                    paramNameSlice = paramName.slice(i, i + limit);
+                    if (!paramNameSlice.length) {
+                        paramNameSlice = paramName;
+                    }
+                    paramNameSet.push(paramNameSlice);
+                }
+            } else if (!options.singleFileUploads && limitSize) {
+                fileSet = [];
+                paramNameSet = [];
+                for (i = 0; i < filesLength; i = i + 1) {
+                    batchSize += files[i].size + overhead;
+                    if (i + 1 === filesLength ||
+                            ((batchSize + files[i + 1].size + overhead) > limitSize) ||
+                            (limit && i + 1 - j >= limit)) {
+                        fileSet.push(files.slice(j, i + 1));
+                        paramNameSlice = paramName.slice(j, i + 1);
+                        if (!paramNameSlice.length) {
+                            paramNameSlice = paramName;
+                        }
+                        paramNameSet.push(paramNameSlice);
+                        j = i + 1;
+                        batchSize = 0;
+                    }
+                }
+            } else {
+                paramNameSet = paramName;
+            }
+            data.originalFiles = files;
+            $.each(fileSet || files, function (index, element) {
+                var newData = $.extend({}, data);
+                newData.files = fileSet ? element : [element];
+                newData.paramName = paramNameSet[index];
+                that._initResponseObject(newData);
+                that._initProgressObject(newData);
+                that._addConvenienceMethods(e, newData);
+                result = that._trigger(
+                    'add',
+                    $.Event('add', {delegatedEvent: e}),
+                    newData
+                );
+                return result;
+            });
+            return result;
+        },
+
+        _replaceFileInput: function (data) {
+            var input = data.fileInput,
+                inputClone = input.clone(true);
+            // Add a reference for the new cloned file input to the data argument:
+            data.fileInputClone = inputClone;
+            $('<form></form>').append(inputClone)[0].reset();
+            // Detaching allows to insert the fileInput on another form
+            // without loosing the file input value:
+            input.after(inputClone).detach();
+            // Avoid memory leaks with the detached file input:
+            $.cleanData(input.unbind('remove'));
+            // Replace the original file input element in the fileInput
+            // elements set with the clone, which has been copied including
+            // event handlers:
+            this.options.fileInput = this.options.fileInput.map(function (i, el) {
+                if (el === input[0]) {
+                    return inputClone[0];
+                }
+                return el;
+            });
+            // If the widget has been initialized on the file input itself,
+            // override this.element with the file input clone:
+            if (input[0] === this.element[0]) {
+                this.element = inputClone;
+            }
+        },
+
+        _handleFileTreeEntry: function (entry, path) {
+            var that = this,
+                dfd = $.Deferred(),
+                errorHandler = function (e) {
+                    if (e && !e.entry) {
+                        e.entry = entry;
+                    }
+                    // Since $.when returns immediately if one
+                    // Deferred is rejected, we use resolve instead.
+                    // This allows valid files and invalid items
+                    // to be returned together in one set:
+                    dfd.resolve([e]);
+                },
+                successHandler = function (entries) {
+                    that._handleFileTreeEntries(
+                        entries,
+                        path + entry.name + '/'
+                    ).done(function (files) {
+                        dfd.resolve(files);
+                    }).fail(errorHandler);
+                },
+                readEntries = function () {
+                    dirReader.readEntries(function (results) {
+                        if (!results.length) {
+                            successHandler(entries);
+                        } else {
+                            entries = entries.concat(results);
+                            readEntries();
+                        }
+                    }, errorHandler);
+                },
+                dirReader, entries = [];
+            path = path || '';
+            if (entry.isFile) {
+                if (entry._file) {
+                    // Workaround for Chrome bug #149735
+                    entry._file.relativePath = path;
+                    dfd.resolve(entry._file);
+                } else {
+                    entry.file(function (file) {
+                        file.relativePath = path;
+                        dfd.resolve(file);
+                    }, errorHandler);
+                }
+            } else if (entry.isDirectory) {
+                dirReader = entry.createReader();
+                readEntries();
+            } else {
+                // Return an empy list for file system items
+                // other than files or directories:
+                dfd.resolve([]);
+            }
+            return dfd.promise();
+        },
+
+        _handleFileTreeEntries: function (entries, path) {
+            var that = this;
+            return $.when.apply(
+                $,
+                $.map(entries, function (entry) {
+                    return that._handleFileTreeEntry(entry, path);
+                })
+            ).pipe(function () {
+                return Array.prototype.concat.apply(
+                    [],
+                    arguments
+                );
+            });
+        },
+
+        _getDroppedFiles: function (dataTransfer) {
+            dataTransfer = dataTransfer || {};
+            var items = dataTransfer.items;
+            if (items && items.length && (items[0].webkitGetAsEntry ||
+                    items[0].getAsEntry)) {
+                return this._handleFileTreeEntries(
+                    $.map(items, function (item) {
+                        var entry;
+                        if (item.webkitGetAsEntry) {
+                            entry = item.webkitGetAsEntry();
+                            if (entry) {
+                                // Workaround for Chrome bug #149735:
+                                entry._file = item.getAsFile();
+                            }
+                            return entry;
+                        }
+                        return item.getAsEntry();
+                    })
+                );
+            }
+            return $.Deferred().resolve(
+                $.makeArray(dataTransfer.files)
+            ).promise();
+        },
+
+        _getSingleFileInputFiles: function (fileInput) {
+            fileInput = $(fileInput);
+            var entries = fileInput.prop('webkitEntries') ||
+                    fileInput.prop('entries'),
+                files,
+                value;
+            if (entries && entries.length) {
+                return this._handleFileTreeEntries(entries);
+            }
+            files = $.makeArray(fileInput.prop('files'));
+            if (!files.length) {
+                value = fileInput.prop('value');
+                if (!value) {
+                    return $.Deferred().resolve([]).promise();
+                }
+                // If the files property is not available, the browser does not
+                // support the File API and we add a pseudo File object with
+                // the input value as name with path information removed:
+                files = [{name: value.replace(/^.*\\/, '')}];
+            } else if (files[0].name === undefined && files[0].fileName) {
+                // File normalization for Safari 4 and Firefox 3:
+                $.each(files, function (index, file) {
+                    file.name = file.fileName;
+                    file.size = file.fileSize;
+                });
+            }
+            return $.Deferred().resolve(files).promise();
+        },
+
+        _getFileInputFiles: function (fileInput) {
+            if (!(fileInput instanceof $) || fileInput.length === 1) {
+                return this._getSingleFileInputFiles(fileInput);
+            }
+            return $.when.apply(
+                $,
+                $.map(fileInput, this._getSingleFileInputFiles)
+            ).pipe(function () {
+                return Array.prototype.concat.apply(
+                    [],
+                    arguments
+                );
+            });
+        },
+
+        _onChange: function (e) {
+            var that = this,
+                data = {
+                    fileInput: $(e.target),
+                    form: $(e.target.form)
+                };
+            this._getFileInputFiles(data.fileInput).always(function (files) {
+                data.files = files;
+                if (that.options.replaceFileInput) {
+                    that._replaceFileInput(data);
+                }
+                if (that._trigger(
+                        'change',
+                        $.Event('change', {delegatedEvent: e}),
+                        data
+                    ) !== false) {
+                    that._onAdd(e, data);
+                }
+            });
+        },
+
+        _onPaste: function (e) {
+            var items = e.originalEvent && e.originalEvent.clipboardData &&
+                    e.originalEvent.clipboardData.items,
+                data = {files: []};
+            if (items && items.length) {
+                $.each(items, function (index, item) {
+                    var file = item.getAsFile && item.getAsFile();
+                    if (file) {
+                        data.files.push(file);
+                    }
+                });
+                if (this._trigger(
+                        'paste',
+                        $.Event('paste', {delegatedEvent: e}),
+                        data
+                    ) !== false) {
+                    this._onAdd(e, data);
+                }
+            }
+        },
+
+        _onDrop: function (e) {
+            e.dataTransfer = e.originalEvent && e.originalEvent.dataTransfer;
+            var that = this,
+                dataTransfer = e.dataTransfer,
+                data = {};
+            if (dataTransfer && dataTransfer.files && dataTransfer.files.length) {
+                e.preventDefault();
+                this._getDroppedFiles(dataTransfer).always(function (files) {
+                    data.files = files;
+                    if (that._trigger(
+                            'drop',
+                            $.Event('drop', {delegatedEvent: e}),
+                            data
+                        ) !== false) {
+                        that._onAdd(e, data);
+                    }
+                });
+            }
+        },
+
+        _onDragOver: getDragHandler('dragover'),
+
+        _onDragEnter: getDragHandler('dragenter'),
+
+        _onDragLeave: getDragHandler('dragleave'),
+
+        _initEventHandlers: function () {
+            if (this._isXHRUpload(this.options)) {
+                this._on(this.options.dropZone, {
+                    dragover: this._onDragOver,
+                    drop: this._onDrop,
+                    // event.preventDefault() on dragenter is required for IE10+:
+                    dragenter: this._onDragEnter,
+                    // dragleave is not required, but added for completeness:
+                    dragleave: this._onDragLeave
+                });
+                this._on(this.options.pasteZone, {
+                    paste: this._onPaste
+                });
+            }
+            if ($.support.fileInput) {
+                this._on(this.options.fileInput, {
+                    change: this._onChange
+                });
+            }
+        },
+
+        _destroyEventHandlers: function () {
+            this._off(this.options.dropZone, 'dragenter dragleave dragover drop');
+            this._off(this.options.pasteZone, 'paste');
+            this._off(this.options.fileInput, 'change');
+        },
+
+        _setOption: function (key, value) {
+            var reinit = $.inArray(key, this._specialOptions) !== -1;
+            if (reinit) {
+                this._destroyEventHandlers();
+            }
+            this._super(key, value);
+            if (reinit) {
+                this._initSpecialOptions();
+                this._initEventHandlers();
+            }
+        },
+
+        _initSpecialOptions: function () {
+            var options = this.options;
+            if (options.fileInput === undefined) {
+                options.fileInput = this.element.is('input[type="file"]') ?
+                        this.element : this.element.find('input[type="file"]');
+            } else if (!(options.fileInput instanceof $)) {
+                options.fileInput = $(options.fileInput);
+            }
+            if (!(options.dropZone instanceof $)) {
+                options.dropZone = $(options.dropZone);
+            }
+            if (!(options.pasteZone instanceof $)) {
+                options.pasteZone = $(options.pasteZone);
+            }
+        },
+
+        _getRegExp: function (str) {
+            var parts = str.split('/'),
+                modifiers = parts.pop();
+            parts.shift();
+            return new RegExp(parts.join('/'), modifiers);
+        },
+
+        _isRegExpOption: function (key, value) {
+            return key !== 'url' && $.type(value) === 'string' &&
+                /^\/.*\/[igm]{0,3}$/.test(value);
+        },
+
+        _initDataAttributes: function () {
+            var that = this,
+                options = this.options,
+                data = this.element.data();
+            // Initialize options set via HTML5 data-attributes:
+            $.each(
+                this.element[0].attributes,
+                function (index, attr) {
+                    var key = attr.name.toLowerCase(),
+                        value;
+                    if (/^data-/.test(key)) {
+                        // Convert hyphen-ated key to camelCase:
+                        key = key.slice(5).replace(/-[a-z]/g, function (str) {
+                            return str.charAt(1).toUpperCase();
+                        });
+                        value = data[key];
+                        if (that._isRegExpOption(key, value)) {
+                            value = that._getRegExp(value);
+                        }
+                        options[key] = value;
+                    }
+                }
+            );
+        },
+
+        _create: function () {
+            this._initDataAttributes();
+            this._initSpecialOptions();
+            this._slots = [];
+            this._sequence = this._getXHRPromise(true);
+            this._sending = this._active = 0;
+            this._initProgressObject(this);
+            this._initEventHandlers();
+        },
+
+        // This method is exposed to the widget API and allows to query
+        // the number of active uploads:
+        active: function () {
+            return this._active;
+        },
+
+        // This method is exposed to the widget API and allows to query
+        // the widget upload progress.
+        // It returns an object with loaded, total and bitrate properties
+        // for the running uploads:
+        progress: function () {
+            return this._progress;
+        },
+
+        // This method is exposed to the widget API and allows adding files
+        // using the fileupload API. The data parameter accepts an object which
+        // must have a files property and can contain additional options:
+        // .fileupload('add', {files: filesList});
+        add: function (data) {
+            var that = this;
+            if (!data || this.options.disabled) {
+                return;
+            }
+            if (data.fileInput && !data.files) {
+                this._getFileInputFiles(data.fileInput).always(function (files) {
+                    data.files = files;
+                    that._onAdd(null, data);
+                });
+            } else {
+                data.files = $.makeArray(data.files);
+                this._onAdd(null, data);
+            }
+        },
+
+        // This method is exposed to the widget API and allows sending files
+        // using the fileupload API. The data parameter accepts an object which
+        // must have a files or fileInput property and can contain additional options:
+        // .fileupload('send', {files: filesList});
+        // The method returns a Promise object for the file upload call.
+        send: function (data) {
+            if (data && !this.options.disabled) {
+                if (data.fileInput && !data.files) {
+                    var that = this,
+                        dfd = $.Deferred(),
+                        promise = dfd.promise(),
+                        jqXHR,
+                        aborted;
+                    promise.abort = function () {
+                        aborted = true;
+                        if (jqXHR) {
+                            return jqXHR.abort();
+                        }
+                        dfd.reject(null, 'abort', 'abort');
+                        return promise;
+                    };
+                    this._getFileInputFiles(data.fileInput).always(
+                        function (files) {
+                            if (aborted) {
+                                return;
+                            }
+                            if (!files.length) {
+                                dfd.reject();
+                                return;
+                            }
+                            data.files = files;
+                            jqXHR = that._onSend(null, data);
+                            jqXHR.then(
+                                function (result, textStatus, jqXHR) {
+                                    dfd.resolve(result, textStatus, jqXHR);
+                                },
+                                function (jqXHR, textStatus, errorThrown) {
+                                    dfd.reject(jqXHR, textStatus, errorThrown);
+                                }
+                            );
+                        }
+                    );
+                    return this._enhancePromise(promise);
+                }
+                data.files = $.makeArray(data.files);
+                if (data.files.length) {
+                    return this._onSend(null, data);
+                }
+            }
+            return this._getXHRPromise(false, data && data.context);
+        }
+
+    });
+
+}));
+
 // override jquery validate plugin defaults
 // get from http://stackoverflow.com/questions/18754020/bootstrap-3-with-jquery-validation-plugin
 $.validator.setDefaults({
@@ -34923,6 +41554,1720 @@ $.validator.setDefaults({
         }
     }
 });
+/*
+ * jQuery File Upload Processing Plugin 1.3.1
+ * https://github.com/blueimp/jQuery-File-Upload
+ *
+ * Copyright 2012, Sebastian Tschan
+ * https://blueimp.net
+ *
+ * Licensed under the MIT license:
+ * http://www.opensource.org/licenses/MIT
+ */
+
+/* jshint nomen:false */
+/* global define, require, window */
+
+(function (factory) {
+    'use strict';
+    if (typeof define === 'function' && define.amd) {
+        // Register as an anonymous AMD module:
+        define([
+            'jquery',
+            './jquery.fileupload'
+        ], factory);
+    } else if (typeof exports === 'object') {
+        // Node/CommonJS:
+        factory(require('jquery'));
+    } else {
+        // Browser globals:
+        factory(
+            window.jQuery
+        );
+    }
+}(function ($) {
+    'use strict';
+
+    var originalAdd = $.blueimp.fileupload.prototype.options.add;
+
+    // The File Upload Processing plugin extends the fileupload widget
+    // with file processing functionality:
+    $.widget('blueimp.fileupload', $.blueimp.fileupload, {
+
+        options: {
+            // The list of processing actions:
+            processQueue: [
+                /*
+                {
+                    action: 'log',
+                    type: 'debug'
+                }
+                */
+            ],
+            add: function (e, data) {
+                var $this = $(this);
+                data.process(function () {
+                    return $this.fileupload('process', data);
+                });
+                originalAdd.call(this, e, data);
+            }
+        },
+
+        processActions: {
+            /*
+            log: function (data, options) {
+                console[options.type](
+                    'Processing "' + data.files[data.index].name + '"'
+                );
+            }
+            */
+        },
+
+        _processFile: function (data, originalData) {
+            var that = this,
+                dfd = $.Deferred().resolveWith(that, [data]),
+                chain = dfd.promise();
+            this._trigger('process', null, data);
+            $.each(data.processQueue, function (i, settings) {
+                var func = function (data) {
+                    if (originalData.errorThrown) {
+                        return $.Deferred()
+                                .rejectWith(that, [originalData]).promise();
+                    }
+                    return that.processActions[settings.action].call(
+                        that,
+                        data,
+                        settings
+                    );
+                };
+                chain = chain.pipe(func, settings.always && func);
+            });
+            chain
+                .done(function () {
+                    that._trigger('processdone', null, data);
+                    that._trigger('processalways', null, data);
+                })
+                .fail(function () {
+                    that._trigger('processfail', null, data);
+                    that._trigger('processalways', null, data);
+                });
+            return chain;
+        },
+
+        // Replaces the settings of each processQueue item that
+        // are strings starting with an "@", using the remaining
+        // substring as key for the option map,
+        // e.g. "@autoUpload" is replaced with options.autoUpload:
+        _transformProcessQueue: function (options) {
+            var processQueue = [];
+            $.each(options.processQueue, function () {
+                var settings = {},
+                    action = this.action,
+                    prefix = this.prefix === true ? action : this.prefix;
+                $.each(this, function (key, value) {
+                    if ($.type(value) === 'string' &&
+                            value.charAt(0) === '@') {
+                        settings[key] = options[
+                            value.slice(1) || (prefix ? prefix +
+                                key.charAt(0).toUpperCase() + key.slice(1) : key)
+                        ];
+                    } else {
+                        settings[key] = value;
+                    }
+
+                });
+                processQueue.push(settings);
+            });
+            options.processQueue = processQueue;
+        },
+
+        // Returns the number of files currently in the processsing queue:
+        processing: function () {
+            return this._processing;
+        },
+
+        // Processes the files given as files property of the data parameter,
+        // returns a Promise object that allows to bind callbacks:
+        process: function (data) {
+            var that = this,
+                options = $.extend({}, this.options, data);
+            if (options.processQueue && options.processQueue.length) {
+                this._transformProcessQueue(options);
+                if (this._processing === 0) {
+                    this._trigger('processstart');
+                }
+                $.each(data.files, function (index) {
+                    var opts = index ? $.extend({}, options) : options,
+                        func = function () {
+                            if (data.errorThrown) {
+                                return $.Deferred()
+                                        .rejectWith(that, [data]).promise();
+                            }
+                            return that._processFile(opts, data);
+                        };
+                    opts.index = index;
+                    that._processing += 1;
+                    that._processingQueue = that._processingQueue.pipe(func, func)
+                        .always(function () {
+                            that._processing -= 1;
+                            if (that._processing === 0) {
+                                that._trigger('processstop');
+                            }
+                        });
+                });
+            }
+            return this._processingQueue;
+        },
+
+        _create: function () {
+            this._super();
+            this._processing = 0;
+            this._processingQueue = $.Deferred().resolveWith(this)
+                .promise();
+        }
+
+    });
+
+}));
+
+/*
+ * jQuery File Upload Image Preview & Resize Plugin 1.7.3
+ * https://github.com/blueimp/jQuery-File-Upload
+ *
+ * Copyright 2013, Sebastian Tschan
+ * https://blueimp.net
+ *
+ * Licensed under the MIT license:
+ * http://www.opensource.org/licenses/MIT
+ */
+
+/* jshint nomen:false */
+/* global define, require, window, Blob */
+
+(function (factory) {
+    'use strict';
+    if (typeof define === 'function' && define.amd) {
+        // Register as an anonymous AMD module:
+        define([
+            'jquery',
+            'load-image',
+            'load-image-meta',
+            'load-image-exif',
+            'load-image-ios',
+            'canvas-to-blob',
+            './jquery.fileupload-process'
+        ], factory);
+    } else if (typeof exports === 'object') {
+        // Node/CommonJS:
+        factory(
+            require('jquery'),
+            require('load-image')
+        );
+    } else {
+        // Browser globals:
+        factory(
+            window.jQuery,
+            window.loadImage
+        );
+    }
+}(function ($, loadImage) {
+    'use strict';
+
+    // Prepend to the default processQueue:
+    $.blueimp.fileupload.prototype.options.processQueue.unshift(
+        {
+            action: 'loadImageMetaData',
+            disableImageHead: '@',
+            disableExif: '@',
+            disableExifThumbnail: '@',
+            disableExifSub: '@',
+            disableExifGps: '@',
+            disabled: '@disableImageMetaDataLoad'
+        },
+        {
+            action: 'loadImage',
+            // Use the action as prefix for the "@" options:
+            prefix: true,
+            fileTypes: '@',
+            maxFileSize: '@',
+            noRevoke: '@',
+            disabled: '@disableImageLoad'
+        },
+        {
+            action: 'resizeImage',
+            // Use "image" as prefix for the "@" options:
+            prefix: 'image',
+            maxWidth: '@',
+            maxHeight: '@',
+            minWidth: '@',
+            minHeight: '@',
+            crop: '@',
+            orientation: '@',
+            forceResize: '@',
+            disabled: '@disableImageResize'
+        },
+        {
+            action: 'saveImage',
+            quality: '@imageQuality',
+            type: '@imageType',
+            disabled: '@disableImageResize'
+        },
+        {
+            action: 'saveImageMetaData',
+            disabled: '@disableImageMetaDataSave'
+        },
+        {
+            action: 'resizeImage',
+            // Use "preview" as prefix for the "@" options:
+            prefix: 'preview',
+            maxWidth: '@',
+            maxHeight: '@',
+            minWidth: '@',
+            minHeight: '@',
+            crop: '@',
+            orientation: '@',
+            thumbnail: '@',
+            canvas: '@',
+            disabled: '@disableImagePreview'
+        },
+        {
+            action: 'setImage',
+            name: '@imagePreviewName',
+            disabled: '@disableImagePreview'
+        },
+        {
+            action: 'deleteImageReferences',
+            disabled: '@disableImageReferencesDeletion'
+        }
+    );
+
+    // The File Upload Resize plugin extends the fileupload widget
+    // with image resize functionality:
+    $.widget('blueimp.fileupload', $.blueimp.fileupload, {
+
+        options: {
+            // The regular expression for the types of images to load:
+            // matched against the file type:
+            loadImageFileTypes: /^image\/(gif|jpeg|png|svg\+xml)$/,
+            // The maximum file size of images to load:
+            loadImageMaxFileSize: 10000000, // 10MB
+            // The maximum width of resized images:
+            imageMaxWidth: 1920,
+            // The maximum height of resized images:
+            imageMaxHeight: 1080,
+            // Defines the image orientation (1-8) or takes the orientation
+            // value from Exif data if set to true:
+            imageOrientation: false,
+            // Define if resized images should be cropped or only scaled:
+            imageCrop: false,
+            // Disable the resize image functionality by default:
+            disableImageResize: true,
+            // The maximum width of the preview images:
+            previewMaxWidth: 80,
+            // The maximum height of the preview images:
+            previewMaxHeight: 80,
+            // Defines the preview orientation (1-8) or takes the orientation
+            // value from Exif data if set to true:
+            previewOrientation: true,
+            // Create the preview using the Exif data thumbnail:
+            previewThumbnail: true,
+            // Define if preview images should be cropped or only scaled:
+            previewCrop: false,
+            // Define if preview images should be resized as canvas elements:
+            previewCanvas: true
+        },
+
+        processActions: {
+
+            // Loads the image given via data.files and data.index
+            // as img element, if the browser supports the File API.
+            // Accepts the options fileTypes (regular expression)
+            // and maxFileSize (integer) to limit the files to load:
+            loadImage: function (data, options) {
+                if (options.disabled) {
+                    return data;
+                }
+                var that = this,
+                    file = data.files[data.index],
+                    dfd = $.Deferred();
+                if (($.type(options.maxFileSize) === 'number' &&
+                            file.size > options.maxFileSize) ||
+                        (options.fileTypes &&
+                            !options.fileTypes.test(file.type)) ||
+                        !loadImage(
+                            file,
+                            function (img) {
+                                if (img.src) {
+                                    data.img = img;
+                                }
+                                dfd.resolveWith(that, [data]);
+                            },
+                            options
+                        )) {
+                    return data;
+                }
+                return dfd.promise();
+            },
+
+            // Resizes the image given as data.canvas or data.img
+            // and updates data.canvas or data.img with the resized image.
+            // Also stores the resized image as preview property.
+            // Accepts the options maxWidth, maxHeight, minWidth,
+            // minHeight, canvas and crop:
+            resizeImage: function (data, options) {
+                if (options.disabled || !(data.canvas || data.img)) {
+                    return data;
+                }
+                options = $.extend({canvas: true}, options);
+                var that = this,
+                    dfd = $.Deferred(),
+                    img = (options.canvas && data.canvas) || data.img,
+                    resolve = function (newImg) {
+                        if (newImg && (newImg.width !== img.width ||
+                                newImg.height !== img.height ||
+                                options.forceResize)) {
+                            data[newImg.getContext ? 'canvas' : 'img'] = newImg;
+                        }
+                        data.preview = newImg;
+                        dfd.resolveWith(that, [data]);
+                    },
+                    thumbnail;
+                if (data.exif) {
+                    if (options.orientation === true) {
+                        options.orientation = data.exif.get('Orientation');
+                    }
+                    if (options.thumbnail) {
+                        thumbnail = data.exif.get('Thumbnail');
+                        if (thumbnail) {
+                            loadImage(thumbnail, resolve, options);
+                            return dfd.promise();
+                        }
+                    }
+                    // Prevent orienting the same image twice:
+                    if (data.orientation) {
+                        delete options.orientation;
+                    } else {
+                        data.orientation = options.orientation;
+                    }
+                }
+                if (img) {
+                    resolve(loadImage.scale(img, options));
+                    return dfd.promise();
+                }
+                return data;
+            },
+
+            // Saves the processed image given as data.canvas
+            // inplace at data.index of data.files:
+            saveImage: function (data, options) {
+                if (!data.canvas || options.disabled) {
+                    return data;
+                }
+                var that = this,
+                    file = data.files[data.index],
+                    dfd = $.Deferred();
+                if (data.canvas.toBlob) {
+                    data.canvas.toBlob(
+                        function (blob) {
+                            if (!blob.name) {
+                                if (file.type === blob.type) {
+                                    blob.name = file.name;
+                                } else if (file.name) {
+                                    blob.name = file.name.replace(
+                                        /\.\w+$/,
+                                        '.' + blob.type.substr(6)
+                                    );
+                                }
+                            }
+                            // Don't restore invalid meta data:
+                            if (file.type !== blob.type) {
+                                delete data.imageHead;
+                            }
+                            // Store the created blob at the position
+                            // of the original file in the files list:
+                            data.files[data.index] = blob;
+                            dfd.resolveWith(that, [data]);
+                        },
+                        options.type || file.type,
+                        options.quality
+                    );
+                } else {
+                    return data;
+                }
+                return dfd.promise();
+            },
+
+            loadImageMetaData: function (data, options) {
+                if (options.disabled) {
+                    return data;
+                }
+                var that = this,
+                    dfd = $.Deferred();
+                loadImage.parseMetaData(data.files[data.index], function (result) {
+                    $.extend(data, result);
+                    dfd.resolveWith(that, [data]);
+                }, options);
+                return dfd.promise();
+            },
+
+            saveImageMetaData: function (data, options) {
+                if (!(data.imageHead && data.canvas &&
+                        data.canvas.toBlob && !options.disabled)) {
+                    return data;
+                }
+                var file = data.files[data.index],
+                    blob = new Blob([
+                        data.imageHead,
+                        // Resized images always have a head size of 20 bytes,
+                        // including the JPEG marker and a minimal JFIF header:
+                        this._blobSlice.call(file, 20)
+                    ], {type: file.type});
+                blob.name = file.name;
+                data.files[data.index] = blob;
+                return data;
+            },
+
+            // Sets the resized version of the image as a property of the
+            // file object, must be called after "saveImage":
+            setImage: function (data, options) {
+                if (data.preview && !options.disabled) {
+                    data.files[data.index][options.name || 'preview'] = data.preview;
+                }
+                return data;
+            },
+
+            deleteImageReferences: function (data, options) {
+                if (!options.disabled) {
+                    delete data.img;
+                    delete data.canvas;
+                    delete data.preview;
+                    delete data.imageHead;
+                }
+                return data;
+            }
+
+        }
+
+    });
+
+}));
+
+/*
+ * jQuery File Upload Audio Preview Plugin 1.0.4
+ * https://github.com/blueimp/jQuery-File-Upload
+ *
+ * Copyright 2013, Sebastian Tschan
+ * https://blueimp.net
+ *
+ * Licensed under the MIT license:
+ * http://www.opensource.org/licenses/MIT
+ */
+
+/* jshint nomen:false */
+/* global define, require, window, document */
+
+(function (factory) {
+    'use strict';
+    if (typeof define === 'function' && define.amd) {
+        // Register as an anonymous AMD module:
+        define([
+            'jquery',
+            'load-image',
+            './jquery.fileupload-process'
+        ], factory);
+    } else if (typeof exports === 'object') {
+        // Node/CommonJS:
+        factory(
+            require('jquery'),
+            require('load-image')
+        );
+    } else {
+        // Browser globals:
+        factory(
+            window.jQuery,
+            window.loadImage
+        );
+    }
+}(function ($, loadImage) {
+    'use strict';
+
+    // Prepend to the default processQueue:
+    $.blueimp.fileupload.prototype.options.processQueue.unshift(
+        {
+            action: 'loadAudio',
+            // Use the action as prefix for the "@" options:
+            prefix: true,
+            fileTypes: '@',
+            maxFileSize: '@',
+            disabled: '@disableAudioPreview'
+        },
+        {
+            action: 'setAudio',
+            name: '@audioPreviewName',
+            disabled: '@disableAudioPreview'
+        }
+    );
+
+    // The File Upload Audio Preview plugin extends the fileupload widget
+    // with audio preview functionality:
+    $.widget('blueimp.fileupload', $.blueimp.fileupload, {
+
+        options: {
+            // The regular expression for the types of audio files to load,
+            // matched against the file type:
+            loadAudioFileTypes: /^audio\/.*$/
+        },
+
+        _audioElement: document.createElement('audio'),
+
+        processActions: {
+
+            // Loads the audio file given via data.files and data.index
+            // as audio element if the browser supports playing it.
+            // Accepts the options fileTypes (regular expression)
+            // and maxFileSize (integer) to limit the files to load:
+            loadAudio: function (data, options) {
+                if (options.disabled) {
+                    return data;
+                }
+                var file = data.files[data.index],
+                    url,
+                    audio;
+                if (this._audioElement.canPlayType &&
+                        this._audioElement.canPlayType(file.type) &&
+                        ($.type(options.maxFileSize) !== 'number' ||
+                            file.size <= options.maxFileSize) &&
+                        (!options.fileTypes ||
+                            options.fileTypes.test(file.type))) {
+                    url = loadImage.createObjectURL(file);
+                    if (url) {
+                        audio = this._audioElement.cloneNode(false);
+                        audio.src = url;
+                        audio.controls = true;
+                        data.audio = audio;
+                        return data;
+                    }
+                }
+                return data;
+            },
+
+            // Sets the audio element as a property of the file object:
+            setAudio: function (data, options) {
+                if (data.audio && !options.disabled) {
+                    data.files[data.index][options.name || 'preview'] = data.audio;
+                }
+                return data;
+            }
+
+        }
+
+    });
+
+}));
+
+/*
+ * jQuery File Upload Video Preview Plugin 1.0.4
+ * https://github.com/blueimp/jQuery-File-Upload
+ *
+ * Copyright 2013, Sebastian Tschan
+ * https://blueimp.net
+ *
+ * Licensed under the MIT license:
+ * http://www.opensource.org/licenses/MIT
+ */
+
+/* jshint nomen:false */
+/* global define, require, window, document */
+
+(function (factory) {
+    'use strict';
+    if (typeof define === 'function' && define.amd) {
+        // Register as an anonymous AMD module:
+        define([
+            'jquery',
+            'load-image',
+            './jquery.fileupload-process'
+        ], factory);
+    } else if (typeof exports === 'object') {
+        // Node/CommonJS:
+        factory(
+            require('jquery'),
+            require('load-image')
+        );
+    } else {
+        // Browser globals:
+        factory(
+            window.jQuery,
+            window.loadImage
+        );
+    }
+}(function ($, loadImage) {
+    'use strict';
+
+    // Prepend to the default processQueue:
+    $.blueimp.fileupload.prototype.options.processQueue.unshift(
+        {
+            action: 'loadVideo',
+            // Use the action as prefix for the "@" options:
+            prefix: true,
+            fileTypes: '@',
+            maxFileSize: '@',
+            disabled: '@disableVideoPreview'
+        },
+        {
+            action: 'setVideo',
+            name: '@videoPreviewName',
+            disabled: '@disableVideoPreview'
+        }
+    );
+
+    // The File Upload Video Preview plugin extends the fileupload widget
+    // with video preview functionality:
+    $.widget('blueimp.fileupload', $.blueimp.fileupload, {
+
+        options: {
+            // The regular expression for the types of video files to load,
+            // matched against the file type:
+            loadVideoFileTypes: /^video\/.*$/
+        },
+
+        _videoElement: document.createElement('video'),
+
+        processActions: {
+
+            // Loads the video file given via data.files and data.index
+            // as video element if the browser supports playing it.
+            // Accepts the options fileTypes (regular expression)
+            // and maxFileSize (integer) to limit the files to load:
+            loadVideo: function (data, options) {
+                if (options.disabled) {
+                    return data;
+                }
+                var file = data.files[data.index],
+                    url,
+                    video;
+                if (this._videoElement.canPlayType &&
+                        this._videoElement.canPlayType(file.type) &&
+                        ($.type(options.maxFileSize) !== 'number' ||
+                            file.size <= options.maxFileSize) &&
+                        (!options.fileTypes ||
+                            options.fileTypes.test(file.type))) {
+                    url = loadImage.createObjectURL(file);
+                    if (url) {
+                        video = this._videoElement.cloneNode(false);
+                        video.src = url;
+                        video.controls = true;
+                        data.video = video;
+                        return data;
+                    }
+                }
+                return data;
+            },
+
+            // Sets the video element as a property of the file object:
+            setVideo: function (data, options) {
+                if (data.video && !options.disabled) {
+                    data.files[data.index][options.name || 'preview'] = data.video;
+                }
+                return data;
+            }
+
+        }
+
+    });
+
+}));
+
+/*
+ * jQuery File Upload Validation Plugin 1.1.3
+ * https://github.com/blueimp/jQuery-File-Upload
+ *
+ * Copyright 2013, Sebastian Tschan
+ * https://blueimp.net
+ *
+ * Licensed under the MIT license:
+ * http://www.opensource.org/licenses/MIT
+ */
+
+/* global define, require, window */
+
+(function (factory) {
+    'use strict';
+    if (typeof define === 'function' && define.amd) {
+        // Register as an anonymous AMD module:
+        define([
+            'jquery',
+            './jquery.fileupload-process'
+        ], factory);
+    } else if (typeof exports === 'object') {
+        // Node/CommonJS:
+        factory(require('jquery'));
+    } else {
+        // Browser globals:
+        factory(
+            window.jQuery
+        );
+    }
+}(function ($) {
+    'use strict';
+
+    // Append to the default processQueue:
+    $.blueimp.fileupload.prototype.options.processQueue.push(
+        {
+            action: 'validate',
+            // Always trigger this action,
+            // even if the previous action was rejected: 
+            always: true,
+            // Options taken from the global options map:
+            acceptFileTypes: '@',
+            maxFileSize: '@',
+            minFileSize: '@',
+            maxNumberOfFiles: '@',
+            disabled: '@disableValidation'
+        }
+    );
+
+    // The File Upload Validation plugin extends the fileupload widget
+    // with file validation functionality:
+    $.widget('blueimp.fileupload', $.blueimp.fileupload, {
+
+        options: {
+            /*
+            // The regular expression for allowed file types, matches
+            // against either file type or file name:
+            acceptFileTypes: /(\.|\/)(gif|jpe?g|png)$/i,
+            // The maximum allowed file size in bytes:
+            maxFileSize: 10000000, // 10 MB
+            // The minimum allowed file size in bytes:
+            minFileSize: undefined, // No minimal file size
+            // The limit of files to be uploaded:
+            maxNumberOfFiles: 10,
+            */
+
+            // Function returning the current number of files,
+            // has to be overriden for maxNumberOfFiles validation:
+            getNumberOfFiles: $.noop,
+
+            // Error and info messages:
+            messages: {
+                maxNumberOfFiles: 'Maximum number of files exceeded',
+                acceptFileTypes: 'File type not allowed',
+                maxFileSize: 'File is too large',
+                minFileSize: 'File is too small'
+            }
+        },
+
+        processActions: {
+
+            validate: function (data, options) {
+                if (options.disabled) {
+                    return data;
+                }
+                var dfd = $.Deferred(),
+                    settings = this.options,
+                    file = data.files[data.index],
+                    fileSize;
+                if (options.minFileSize || options.maxFileSize) {
+                    fileSize = file.size;
+                }
+                if ($.type(options.maxNumberOfFiles) === 'number' &&
+                        (settings.getNumberOfFiles() || 0) + data.files.length >
+                            options.maxNumberOfFiles) {
+                    file.error = settings.i18n('maxNumberOfFiles');
+                } else if (options.acceptFileTypes &&
+                        !(options.acceptFileTypes.test(file.type) ||
+                        options.acceptFileTypes.test(file.name))) {
+                    file.error = settings.i18n('acceptFileTypes');
+                } else if (fileSize > options.maxFileSize) {
+                    file.error = settings.i18n('maxFileSize');
+                } else if ($.type(fileSize) === 'number' &&
+                        fileSize < options.minFileSize) {
+                    file.error = settings.i18n('minFileSize');
+                } else {
+                    delete file.error;
+                }
+                if (file.error || data.files.error) {
+                    data.files.error = true;
+                    dfd.rejectWith(this, [data]);
+                } else {
+                    dfd.resolveWith(this, [data]);
+                }
+                return dfd.promise();
+            }
+
+        }
+
+    });
+
+}));
+
+/*
+ * jQuery File Upload User Interface Plugin 9.6.1
+ * https://github.com/blueimp/jQuery-File-Upload
+ *
+ * Copyright 2010, Sebastian Tschan
+ * https://blueimp.net
+ *
+ * Licensed under the MIT license:
+ * http://www.opensource.org/licenses/MIT
+ */
+
+/* jshint nomen:false */
+/* global define, require, window */
+
+(function (factory) {
+    'use strict';
+    if (typeof define === 'function' && define.amd) {
+        // Register as an anonymous AMD module:
+        define([
+            'jquery',
+            'tmpl',
+            './jquery.fileupload-image',
+            './jquery.fileupload-audio',
+            './jquery.fileupload-video',
+            './jquery.fileupload-validate'
+        ], factory);
+    } else if (typeof exports === 'object') {
+        // Node/CommonJS:
+        factory(
+            require('jquery'),
+            require('tmpl')
+        );
+    } else {
+        // Browser globals:
+        factory(
+            window.jQuery,
+            window.tmpl
+        );
+    }
+}(function ($, tmpl) {
+    'use strict';
+
+    $.blueimp.fileupload.prototype._specialOptions.push(
+        'filesContainer',
+        'uploadTemplateId',
+        'downloadTemplateId'
+    );
+
+    // The UI version extends the file upload widget
+    // and adds complete user interface interaction:
+    $.widget('blueimp.fileupload', $.blueimp.fileupload, {
+
+        options: {
+            // By default, files added to the widget are uploaded as soon
+            // as the user clicks on the start buttons. To enable automatic
+            // uploads, set the following option to true:
+            autoUpload: false,
+            // The ID of the upload template:
+            uploadTemplateId: 'template-upload',
+            // The ID of the download template:
+            downloadTemplateId: 'template-download',
+            // The container for the list of files. If undefined, it is set to
+            // an element with class "files" inside of the widget element:
+            filesContainer: undefined,
+            // By default, files are appended to the files container.
+            // Set the following option to true, to prepend files instead:
+            prependFiles: false,
+            // The expected data type of the upload response, sets the dataType
+            // option of the $.ajax upload requests:
+            dataType: 'json',
+            
+            // Error and info messages:
+            messages: {
+                unknownError: 'Unknown error'  
+            },
+
+            // Function returning the current number of files,
+            // used by the maxNumberOfFiles validation:
+            getNumberOfFiles: function () {
+                return this.filesContainer.children()
+                    .not('.processing').length;
+            },
+
+            // Callback to retrieve the list of files from the server response:
+            getFilesFromResponse: function (data) {
+                if (data.result && $.isArray(data.result.files)) {
+                    return data.result.files;
+                }
+                return [];
+            },
+
+            // The add callback is invoked as soon as files are added to the fileupload
+            // widget (via file input selection, drag & drop or add API call).
+            // See the basic file upload widget for more information:
+            add: function (e, data) {
+                if (e.isDefaultPrevented()) {
+                    return false;
+                }
+                var $this = $(this),
+                    that = $this.data('blueimp-fileupload') ||
+                        $this.data('fileupload'),
+                    options = that.options;
+                data.context = that._renderUpload(data.files)
+                    .data('data', data)
+                    .addClass('processing');
+                options.filesContainer[
+                    options.prependFiles ? 'prepend' : 'append'
+                ](data.context);
+                that._forceReflow(data.context);
+                that._transition(data.context);
+                data.process(function () {
+                    return $this.fileupload('process', data);
+                }).always(function () {
+                    data.context.each(function (index) {
+                        $(this).find('.size').text(
+                            that._formatFileSize(data.files[index].size)
+                        );
+                    }).removeClass('processing');
+                    that._renderPreviews(data);
+                }).done(function () {
+                    data.context.find('.start').prop('disabled', false);
+                    if ((that._trigger('added', e, data) !== false) &&
+                            (options.autoUpload || data.autoUpload) &&
+                            data.autoUpload !== false) {
+                        data.submit();
+                    }
+                }).fail(function () {
+                    if (data.files.error) {
+                        data.context.each(function (index) {
+                            var error = data.files[index].error;
+                            if (error) {
+                                $(this).find('.error').text(error);
+                            }
+                        });
+                    }
+                });
+            },
+            // Callback for the start of each file upload request:
+            send: function (e, data) {
+                if (e.isDefaultPrevented()) {
+                    return false;
+                }
+                var that = $(this).data('blueimp-fileupload') ||
+                        $(this).data('fileupload');
+                if (data.context && data.dataType &&
+                        data.dataType.substr(0, 6) === 'iframe') {
+                    // Iframe Transport does not support progress events.
+                    // In lack of an indeterminate progress bar, we set
+                    // the progress to 100%, showing the full animated bar:
+                    data.context
+                        .find('.progress').addClass(
+                            !$.support.transition && 'progress-animated'
+                        )
+                        .attr('aria-valuenow', 100)
+                        .children().first().css(
+                            'width',
+                            '100%'
+                        );
+                }
+                return that._trigger('sent', e, data);
+            },
+            // Callback for successful uploads:
+            done: function (e, data) {
+                if (e.isDefaultPrevented()) {
+                    return false;
+                }
+                var that = $(this).data('blueimp-fileupload') ||
+                        $(this).data('fileupload'),
+                    getFilesFromResponse = data.getFilesFromResponse ||
+                        that.options.getFilesFromResponse,
+                    files = getFilesFromResponse(data),
+                    template,
+                    deferred;
+                if (data.context) {
+                    data.context.each(function (index) {
+                        var file = files[index] ||
+                                {error: 'Empty file upload result'};
+                        deferred = that._addFinishedDeferreds();
+                        that._transition($(this)).done(
+                            function () {
+                                var node = $(this);
+                                template = that._renderDownload([file])
+                                    .replaceAll(node);
+                                that._forceReflow(template);
+                                that._transition(template).done(
+                                    function () {
+                                        data.context = $(this);
+                                        that._trigger('completed', e, data);
+                                        that._trigger('finished', e, data);
+                                        deferred.resolve();
+                                    }
+                                );
+                            }
+                        );
+                    });
+                } else {
+                    template = that._renderDownload(files)[
+                        that.options.prependFiles ? 'prependTo' : 'appendTo'
+                    ](that.options.filesContainer);
+                    that._forceReflow(template);
+                    deferred = that._addFinishedDeferreds();
+                    that._transition(template).done(
+                        function () {
+                            data.context = $(this);
+                            that._trigger('completed', e, data);
+                            that._trigger('finished', e, data);
+                            deferred.resolve();
+                        }
+                    );
+                }
+            },
+            // Callback for failed (abort or error) uploads:
+            fail: function (e, data) {
+                if (e.isDefaultPrevented()) {
+                    return false;
+                }
+                var that = $(this).data('blueimp-fileupload') ||
+                        $(this).data('fileupload'),
+                    template,
+                    deferred;
+                if (data.context) {
+                    data.context.each(function (index) {
+                        if (data.errorThrown !== 'abort') {
+                            var file = data.files[index];
+                            file.error = file.error || data.errorThrown ||
+                                data.i18n('unknownError');
+                            deferred = that._addFinishedDeferreds();
+                            that._transition($(this)).done(
+                                function () {
+                                    var node = $(this);
+                                    template = that._renderDownload([file])
+                                        .replaceAll(node);
+                                    that._forceReflow(template);
+                                    that._transition(template).done(
+                                        function () {
+                                            data.context = $(this);
+                                            that._trigger('failed', e, data);
+                                            that._trigger('finished', e, data);
+                                            deferred.resolve();
+                                        }
+                                    );
+                                }
+                            );
+                        } else {
+                            deferred = that._addFinishedDeferreds();
+                            that._transition($(this)).done(
+                                function () {
+                                    $(this).remove();
+                                    that._trigger('failed', e, data);
+                                    that._trigger('finished', e, data);
+                                    deferred.resolve();
+                                }
+                            );
+                        }
+                    });
+                } else if (data.errorThrown !== 'abort') {
+                    data.context = that._renderUpload(data.files)[
+                        that.options.prependFiles ? 'prependTo' : 'appendTo'
+                    ](that.options.filesContainer)
+                        .data('data', data);
+                    that._forceReflow(data.context);
+                    deferred = that._addFinishedDeferreds();
+                    that._transition(data.context).done(
+                        function () {
+                            data.context = $(this);
+                            that._trigger('failed', e, data);
+                            that._trigger('finished', e, data);
+                            deferred.resolve();
+                        }
+                    );
+                } else {
+                    that._trigger('failed', e, data);
+                    that._trigger('finished', e, data);
+                    that._addFinishedDeferreds().resolve();
+                }
+            },
+            // Callback for upload progress events:
+            progress: function (e, data) {
+                if (e.isDefaultPrevented()) {
+                    return false;
+                }
+                var progress = Math.floor(data.loaded / data.total * 100);
+                if (data.context) {
+                    data.context.each(function () {
+                        $(this).find('.progress')
+                            .attr('aria-valuenow', progress)
+                            .children().first().css(
+                                'width',
+                                progress + '%'
+                            );
+                    });
+                }
+            },
+            // Callback for global upload progress events:
+            progressall: function (e, data) {
+                if (e.isDefaultPrevented()) {
+                    return false;
+                }
+                var $this = $(this),
+                    progress = Math.floor(data.loaded / data.total * 100),
+                    globalProgressNode = $this.find('.fileupload-progress'),
+                    extendedProgressNode = globalProgressNode
+                        .find('.progress-extended');
+                if (extendedProgressNode.length) {
+                    extendedProgressNode.html(
+                        ($this.data('blueimp-fileupload') || $this.data('fileupload'))
+                            ._renderExtendedProgress(data)
+                    );
+                }
+                globalProgressNode
+                    .find('.progress')
+                    .attr('aria-valuenow', progress)
+                    .children().first().css(
+                        'width',
+                        progress + '%'
+                    );
+            },
+            // Callback for uploads start, equivalent to the global ajaxStart event:
+            start: function (e) {
+                if (e.isDefaultPrevented()) {
+                    return false;
+                }
+                var that = $(this).data('blueimp-fileupload') ||
+                        $(this).data('fileupload');
+                that._resetFinishedDeferreds();
+                that._transition($(this).find('.fileupload-progress')).done(
+                    function () {
+                        that._trigger('started', e);
+                    }
+                );
+            },
+            // Callback for uploads stop, equivalent to the global ajaxStop event:
+            stop: function (e) {
+                if (e.isDefaultPrevented()) {
+                    return false;
+                }
+                var that = $(this).data('blueimp-fileupload') ||
+                        $(this).data('fileupload'),
+                    deferred = that._addFinishedDeferreds();
+                $.when.apply($, that._getFinishedDeferreds())
+                    .done(function () {
+                        that._trigger('stopped', e);
+                    });
+                that._transition($(this).find('.fileupload-progress')).done(
+                    function () {
+                        $(this).find('.progress')
+                            .attr('aria-valuenow', '0')
+                            .children().first().css('width', '0%');
+                        $(this).find('.progress-extended').html('&nbsp;');
+                        deferred.resolve();
+                    }
+                );
+            },
+            processstart: function (e) {
+                if (e.isDefaultPrevented()) {
+                    return false;
+                }
+                $(this).addClass('fileupload-processing');
+            },
+            processstop: function (e) {
+                if (e.isDefaultPrevented()) {
+                    return false;
+                }
+                $(this).removeClass('fileupload-processing');
+            },
+            // Callback for file deletion:
+            destroy: function (e, data) {
+                if (e.isDefaultPrevented()) {
+                    return false;
+                }
+                var that = $(this).data('blueimp-fileupload') ||
+                        $(this).data('fileupload'),
+                    removeNode = function () {
+                        that._transition(data.context).done(
+                            function () {
+                                $(this).remove();
+                                that._trigger('destroyed', e, data);
+                            }
+                        );
+                    };
+                if (data.url) {
+                    data.dataType = data.dataType || that.options.dataType;
+                    $.ajax(data).done(removeNode).fail(function () {
+                        that._trigger('destroyfailed', e, data);
+                    });
+                } else {
+                    removeNode();
+                }
+            }
+        },
+
+        _resetFinishedDeferreds: function () {
+            this._finishedUploads = [];
+        },
+
+        _addFinishedDeferreds: function (deferred) {
+            if (!deferred) {
+                deferred = $.Deferred();
+            }
+            this._finishedUploads.push(deferred);
+            return deferred;
+        },
+
+        _getFinishedDeferreds: function () {
+            return this._finishedUploads;
+        },
+
+        // Link handler, that allows to download files
+        // by drag & drop of the links to the desktop:
+        _enableDragToDesktop: function () {
+            var link = $(this),
+                url = link.prop('href'),
+                name = link.prop('download'),
+                type = 'application/octet-stream';
+            link.bind('dragstart', function (e) {
+                try {
+                    e.originalEvent.dataTransfer.setData(
+                        'DownloadURL',
+                        [type, name, url].join(':')
+                    );
+                } catch (ignore) {}
+            });
+        },
+
+        _formatFileSize: function (bytes) {
+            if (typeof bytes !== 'number') {
+                return '';
+            }
+            if (bytes >= 1000000000) {
+                return (bytes / 1000000000).toFixed(2) + ' GB';
+            }
+            if (bytes >= 1000000) {
+                return (bytes / 1000000).toFixed(2) + ' MB';
+            }
+            return (bytes / 1000).toFixed(2) + ' KB';
+        },
+
+        _formatBitrate: function (bits) {
+            if (typeof bits !== 'number') {
+                return '';
+            }
+            if (bits >= 1000000000) {
+                return (bits / 1000000000).toFixed(2) + ' Gbit/s';
+            }
+            if (bits >= 1000000) {
+                return (bits / 1000000).toFixed(2) + ' Mbit/s';
+            }
+            if (bits >= 1000) {
+                return (bits / 1000).toFixed(2) + ' kbit/s';
+            }
+            return bits.toFixed(2) + ' bit/s';
+        },
+
+        _formatTime: function (seconds) {
+            var date = new Date(seconds * 1000),
+                days = Math.floor(seconds / 86400);
+            days = days ? days + 'd ' : '';
+            return days +
+                ('0' + date.getUTCHours()).slice(-2) + ':' +
+                ('0' + date.getUTCMinutes()).slice(-2) + ':' +
+                ('0' + date.getUTCSeconds()).slice(-2);
+        },
+
+        _formatPercentage: function (floatValue) {
+            return (floatValue * 100).toFixed(2) + ' %';
+        },
+
+        _renderExtendedProgress: function (data) {
+            return this._formatBitrate(data.bitrate) + ' | ' +
+                this._formatTime(
+                    (data.total - data.loaded) * 8 / data.bitrate
+                ) + ' | ' +
+                this._formatPercentage(
+                    data.loaded / data.total
+                ) + ' | ' +
+                this._formatFileSize(data.loaded) + ' / ' +
+                this._formatFileSize(data.total);
+        },
+
+        _renderTemplate: function (func, files) {
+            if (!func) {
+                return $();
+            }
+            var result = func({
+                files: files,
+                formatFileSize: this._formatFileSize,
+                options: this.options
+            });
+            if (result instanceof $) {
+                return result;
+            }
+            return $(this.options.templatesContainer).html(result).children();
+        },
+
+        _renderPreviews: function (data) {
+            data.context.find('.preview').each(function (index, elm) {
+                $(elm).append(data.files[index].preview);
+            });
+        },
+
+        _renderUpload: function (files) {
+            return this._renderTemplate(
+                this.options.uploadTemplate,
+                files
+            );
+        },
+
+        _renderDownload: function (files) {
+            return this._renderTemplate(
+                this.options.downloadTemplate,
+                files
+            ).find('a[download]').each(this._enableDragToDesktop).end();
+        },
+
+        _startHandler: function (e) {
+            e.preventDefault();
+            var button = $(e.currentTarget),
+                template = button.closest('.template-upload'),
+                data = template.data('data');
+            button.prop('disabled', true);
+            if (data && data.submit) {
+                data.submit();
+            }
+        },
+
+        _cancelHandler: function (e) {
+            e.preventDefault();
+            var template = $(e.currentTarget)
+                    .closest('.template-upload,.template-download'),
+                data = template.data('data') || {};
+            data.context = data.context || template;
+            if (data.abort) {
+                data.abort();
+            } else {
+                data.errorThrown = 'abort';
+                this._trigger('fail', e, data);
+            }
+        },
+
+        _deleteHandler: function (e) {
+            e.preventDefault();
+            var button = $(e.currentTarget);
+            this._trigger('destroy', e, $.extend({
+                context: button.closest('.template-download'),
+                type: 'DELETE'
+            }, button.data()));
+        },
+
+        _forceReflow: function (node) {
+            return $.support.transition && node.length &&
+                node[0].offsetWidth;
+        },
+
+        _transition: function (node) {
+            var dfd = $.Deferred();
+            if ($.support.transition && node.hasClass('fade') && node.is(':visible')) {
+                node.bind(
+                    $.support.transition.end,
+                    function (e) {
+                        // Make sure we don't respond to other transitions events
+                        // in the container element, e.g. from button elements:
+                        if (e.target === node[0]) {
+                            node.unbind($.support.transition.end);
+                            dfd.resolveWith(node);
+                        }
+                    }
+                ).toggleClass('in');
+            } else {
+                node.toggleClass('in');
+                dfd.resolveWith(node);
+            }
+            return dfd;
+        },
+
+        _initButtonBarEventHandlers: function () {
+            var fileUploadButtonBar = this.element.find('.fileupload-buttonbar'),
+                filesList = this.options.filesContainer;
+            this._on(fileUploadButtonBar.find('.start'), {
+                click: function (e) {
+                    e.preventDefault();
+                    filesList.find('.start').click();
+                }
+            });
+            this._on(fileUploadButtonBar.find('.cancel'), {
+                click: function (e) {
+                    e.preventDefault();
+                    filesList.find('.cancel').click();
+                }
+            });
+            this._on(fileUploadButtonBar.find('.delete'), {
+                click: function (e) {
+                    e.preventDefault();
+                    filesList.find('.toggle:checked')
+                        .closest('.template-download')
+                        .find('.delete').click();
+                    fileUploadButtonBar.find('.toggle')
+                        .prop('checked', false);
+                }
+            });
+            this._on(fileUploadButtonBar.find('.toggle'), {
+                change: function (e) {
+                    filesList.find('.toggle').prop(
+                        'checked',
+                        $(e.currentTarget).is(':checked')
+                    );
+                }
+            });
+        },
+
+        _destroyButtonBarEventHandlers: function () {
+            this._off(
+                this.element.find('.fileupload-buttonbar')
+                    .find('.start, .cancel, .delete'),
+                'click'
+            );
+            this._off(
+                this.element.find('.fileupload-buttonbar .toggle'),
+                'change.'
+            );
+        },
+
+        _initEventHandlers: function () {
+            this._super();
+            this._on(this.options.filesContainer, {
+                'click .start': this._startHandler,
+                'click .cancel': this._cancelHandler,
+                'click .delete': this._deleteHandler
+            });
+            this._initButtonBarEventHandlers();
+        },
+
+        _destroyEventHandlers: function () {
+            this._destroyButtonBarEventHandlers();
+            this._off(this.options.filesContainer, 'click');
+            this._super();
+        },
+
+        _enableFileInputButton: function () {
+            this.element.find('.fileinput-button input')
+                .prop('disabled', false)
+                .parent().removeClass('disabled');
+        },
+
+        _disableFileInputButton: function () {
+            this.element.find('.fileinput-button input')
+                .prop('disabled', true)
+                .parent().addClass('disabled');
+        },
+
+        _initTemplates: function () {
+            var options = this.options;
+            options.templatesContainer = this.document[0].createElement(
+                options.filesContainer.prop('nodeName')
+            );
+            if (tmpl) {
+                if (options.uploadTemplateId) {
+                    options.uploadTemplate = tmpl(options.uploadTemplateId);
+                }
+                if (options.downloadTemplateId) {
+                    options.downloadTemplate = tmpl(options.downloadTemplateId);
+                }
+            }
+        },
+
+        _initFilesContainer: function () {
+            var options = this.options;
+            if (options.filesContainer === undefined) {
+                options.filesContainer = this.element.find('.files');
+            } else if (!(options.filesContainer instanceof $)) {
+                options.filesContainer = $(options.filesContainer);
+            }
+        },
+
+        _initSpecialOptions: function () {
+            this._super();
+            this._initFilesContainer();
+            this._initTemplates();
+        },
+
+        _create: function () {
+            this._super();
+            this._resetFinishedDeferreds();
+            if (!$.support.fileInput) {
+                this._disableFileInputButton();
+            }
+        },
+
+        enable: function () {
+            var wasDisabled = false;
+            if (this.options.disabled) {
+                wasDisabled = true;
+            }
+            this._super();
+            if (wasDisabled) {
+                this.element.find('input, button').prop('disabled', false);
+                this._enableFileInputButton();
+            }
+        },
+
+        disable: function () {
+            if (!this.options.disabled) {
+                this.element.find('input, button').prop('disabled', true);
+                this._disableFileInputButton();
+            }
+            this._super();
+        }
+
+    });
+
+}));
+
+/*
+ * jQuery File Upload jQuery UI Plugin 8.7.2
+ * https://github.com/blueimp/jQuery-File-Upload
+ *
+ * Copyright 2013, Sebastian Tschan
+ * https://blueimp.net
+ *
+ * Licensed under the MIT license:
+ * http://www.opensource.org/licenses/MIT
+ */
+
+/* jshint nomen:false */
+/* global define, require, window */
+
+(function (factory) {
+    'use strict';
+    if (typeof define === 'function' && define.amd) {
+        // Register as an anonymous AMD module:
+        define(['jquery', './jquery.fileupload-ui'], factory);
+    } else if (typeof exports === 'object') {
+        // Node/CommonJS:
+        factory(require('jquery'));
+    } else {
+        // Browser globals:
+        factory(window.jQuery);
+    }
+}(function ($) {
+    'use strict';
+
+    $.widget('blueimp.fileupload', $.blueimp.fileupload, {
+
+        options: {
+            processdone: function (e, data) {
+                data.context.find('.start').button('enable');
+            },
+            progress: function (e, data) {
+                if (data.context) {
+                    data.context.find('.progress').progressbar(
+                        'option',
+                        'value',
+                        parseInt(data.loaded / data.total * 100, 10)
+                    );
+                }
+            },
+            progressall: function (e, data) {
+                var $this = $(this);
+                $this.find('.fileupload-progress')
+                    .find('.progress').progressbar(
+                        'option',
+                        'value',
+                        parseInt(data.loaded / data.total * 100, 10)
+                    ).end()
+                    .find('.progress-extended').each(function () {
+                        $(this).html(
+                            ($this.data('blueimp-fileupload') ||
+                                    $this.data('fileupload'))
+                                ._renderExtendedProgress(data)
+                        );
+                    });
+            }
+        },
+
+        _renderUpload: function (func, files) {
+            var node = this._super(func, files),
+                showIconText = $(window).width() > 480;
+            node.find('.progress').empty().progressbar();
+            node.find('.start').button({
+                icons: {primary: 'ui-icon-circle-arrow-e'},
+                text: showIconText
+            });
+            node.find('.cancel').button({
+                icons: {primary: 'ui-icon-cancel'},
+                text: showIconText
+            });
+            if (node.hasClass('fade')) {
+                node.hide();
+            }
+            return node;
+        },
+
+        _renderDownload: function (func, files) {
+            var node = this._super(func, files),
+                showIconText = $(window).width() > 480;
+            node.find('.delete').button({
+                icons: {primary: 'ui-icon-trash'},
+                text: showIconText
+            });
+            if (node.hasClass('fade')) {
+                node.hide();
+            }
+            return node;
+        },
+
+        _startHandler: function (e) {
+            $(e.currentTarget).button('disable');
+            this._super(e);
+        },
+
+        _transition: function (node) {
+            var deferred = $.Deferred();
+            if (node.hasClass('fade')) {
+                node.fadeToggle(
+                    this.options.transitionDuration,
+                    this.options.transitionEasing,
+                    function () {
+                        deferred.resolveWith(node);
+                    }
+                );
+            } else {
+                deferred.resolveWith(node);
+            }
+            return deferred;
+        },
+
+        _create: function () {
+            this._super();
+            this.element
+                .find('.fileupload-buttonbar')
+                .find('.fileinput-button').each(function () {
+                    var input = $(this).find('input:file').detach();
+                    $(this)
+                        .button({icons: {primary: 'ui-icon-plusthick'}})
+                        .append(input);
+                })
+                .end().find('.start')
+                .button({icons: {primary: 'ui-icon-circle-arrow-e'}})
+                .end().find('.cancel')
+                .button({icons: {primary: 'ui-icon-cancel'}})
+                .end().find('.delete')
+                .button({icons: {primary: 'ui-icon-trash'}})
+                .end().find('.progress').progressbar();
+        },
+
+        _destroy: function () {
+            this.element
+                .find('.fileupload-buttonbar')
+                .find('.fileinput-button').each(function () {
+                    var input = $(this).find('input:file').detach();
+                    $(this)
+                        .button('destroy')
+                        .append(input);
+                })
+                .end().find('.start')
+                .button('destroy')
+                .end().find('.cancel')
+                .button('destroy')
+                .end().find('.delete')
+                .button('destroy')
+                .end().find('.progress').progressbar('destroy');
+            this._super();
+        }
+
+    });
+
+}));
+
 /*!
  * Select2 4.0.0
  * https://select2.github.io
@@ -40332,6 +48677,12 @@ S2.define('jquery.mousewheel',[
  */
 
 (function (window, page) {
+
+if ($.timepicker) {
+  $.datepicker.setDefaults($.timepicker.regional[window.WE_BOOTSTRAP_CONFIG.locale]);
+  $.timepicker.setDefaults($.timepicker.regional[window.WE_BOOTSTRAP_CONFIG.locale]);
+}
+
 var we = {
   autoInitialize: true,
   config: {},
@@ -40353,7 +48704,6 @@ var we = {
       we.structure.regions[regions[i].id] = window.$(regions[i]);
     }
 
-    this.renderComponents();
     this.setElementEvents();
     //this.handlerErrorMessage();
 
@@ -40650,8 +49000,7 @@ we.Event.prototype = {
     if (this._listeners[event.type] instanceof Array) {
       var listeners = this._listeners[event.type];
       for (var i=0, len=listeners.length; i < len; i++){
-
-          listeners[i].apply(this, arguments);
+        listeners[i].apply(this, arguments);
       }
     }
   },
@@ -40820,6 +49169,22 @@ we.components = {
 
     table.dataTable(config);
   },
+  tableDrag: function tableDrag(selector, options) {
+    if (!options) options =  {
+      weight: {fieldClass: 'row-weight', hidden: true },
+      parent: {
+        fieldClass: 'row-parent',
+        sourceFieldClass: 'id',
+        hidden: true
+      },
+      group: {
+        fieldClass: 'row-depth',
+        depthLimit: 3
+      }
+    };
+    $(selector).tableDrag(options);
+  },
+
   editor: {
     styles: {
       small: [
@@ -40920,9 +49285,13 @@ we.components = {
 we.message = {
   newMessage: function newMessage(status, message) {
     $('form[we-submit="ajax"] > fieldset').fadeIn('slow', function() {
-      $(this).append('<message class="alert alert-' + status + '">' + message + '</message>');
+      $(this).append('<div data-dismiss="alert" aria-label="Close" class="alert alert-' + status + '">'+
+        '<button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">×</span></button>'+
+        message + '</div>'
+      );
     });
   },
+
   closeMessage: function closeMessage(obj) {
     setTimeout(function() {
        $('message').fadeOut('slow', function() {
@@ -40945,40 +49314,6 @@ $(window.document).ajaxError(function(e, xhr) {
   }
 });
 
-we.renderComponents = function renderComponents() {
-  var components = '<div class="we-components-area">';
-  // add widget modal
-  components += '<div id="AddWidgetFormModal" class="modal" aria-hidden="true">'+
-      '<div class="modal-dialog modal-lg">'+
-        '<div class="modal-content">'+
-          '<div class="modal-header">'+
-            '<button type="button" class="close" data-dismiss="modal" aria-hidden="true">×</button>'+
-            '<h4 class="modal-title">Add widget</h4>'+
-          '</div>'+
-          '<div class="modal-body">'+
-            '<p>Loading ...</p>'+
-          '</div>'+
-        '</div>'+
-      '</div>'+
-    '</div>';
-  // updateWidgetFormModal
-  components += '<div id="updateWidgetFormModal" class="modal" aria-hidden="true">'+
-    '<div class="modal-dialog modal-lg">'+
-      '<div class="modal-content">'+
-        '<div class="modal-header">'+
-          '<button type="button" class="close" data-dismiss="modal" aria-hidden="true">×</button>'+
-          '<h4 class="modal-title">Update widget</h4>'+
-        '</div>'+
-        '<div class="modal-body"></div>'+
-      '</div>'+
-    '</div>'+
-  '</div>';
-
-  components += '</div>';
-
-  $('body').append(components);
-}
-
 window.we = we;
 
 // auto initialize
@@ -40987,3 +49322,109 @@ $(function(){
 });
 
 })(window, window.page);
+/**
+ * We.js client side lib
+ */
+
+(function (we) {
+
+we.components.imageSelector = {
+  selectImage: function(cb) {
+    this.imageSelectedHandler = cb;
+
+    this.modal.modal('show');
+  },
+  imageSelected: function(err, image) {
+    this.imageSelectedHandler(err, image);
+
+    this.modal.modal('hide');
+    this.imageSelectedHandler = null;
+  },
+  imageSelectedHandler: null,
+  init: function init(selector) {
+    var self = this;
+    this.modal = $(selector);
+    this.messagesArea = this.modal.find('.image-uploader-messages');
+    this.uploader = this.modal.find('.fileupload');
+    this.progress = this.modal.find('.progress');
+    this.progressBar = this.progress.find('.progress-bar');
+
+    // Change this to the location of your server-side upload handler:
+    this.uploader.fileupload({
+      dataType: 'json',
+      sequentialUploads: true,
+      add: function (e, data) {
+        data.submit();
+        self.progress.show();
+      },
+      done: function (e, data) {
+        if (self.imageSelectedHandler) {
+          self.imageSelectedHandler(null, data.result.image[0]);
+          self.modal.modal('hide');
+        } else {
+          console.log('TODO show done in image selector modal');
+        }
+        we.imageSelectedHandler = null;
+        self.progress.hide();
+        self.progressBar.css( 'width', '0%' );
+      },
+      progressall: function (e, data) {
+        var progress = parseInt(data.loaded / data.total * 100, 10);
+        self.progressBar.css( 'width', progress + '%' );
+      },
+      fail: function (e, data) {
+        var xhr = data.jqXHR;
+        if (xhr.responseJSON && xhr.responseJSON.messages) {
+          for(var i = 0; i < xhr.responseJSON.messages.length; i++) {
+            var msg = xhr.responseJSON.messages[i];
+              newMessage(msg.status, msg.message);
+          }
+        }
+      }
+    }).prop('disabled', !$.support.fileInput)
+    .parent().addClass($.support.fileInput ? undefined : 'disabled');
+
+    function newMessage(status, message) {
+     self.messagesArea.append('<div data-dismiss="alert" aria-label="Close" class="alert alert-' + status + '">'+
+        '<button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">×</span></button>' +
+       message + ' </div>');
+    }
+
+  },
+  selectImageForField: function(selector, name) {
+    var self = this;
+    this.selectImage(function (err, image) {
+      if (err) throw new Error('Error on select image.');
+      self.showFieldImageData(selector, name, image);
+    });
+  },
+
+  showFieldImageSelector: function(fieldSelector) {
+
+  },
+
+  showFieldImageData: function(fieldSelector, name, image) {
+    var row = $(fieldSelector + 'ImageFieldTemplates tr').clone();
+    row.find('td[data-image-name]').html(image.originalname);
+    row.find('td[data-image-thumbnail]').html(
+      '<img src="'+ image.urls.thumbnail +'">' +
+      '<input name="'+name+'" type="hidden" value="'+image.id+'">'
+    );
+
+    $(fieldSelector + 'ImageBTNSelector').hide();
+    $(fieldSelector + 'ImageTable tbody').append(row);
+    $(fieldSelector + 'ImageTable').show();
+  },
+
+  removeImage: function(e, selector) {
+    var tbody = $(e).parent().parent().parent();
+    $(e).parent().parent().remove();
+
+    if (!tbody.find('tr').length) {
+      $(selector + 'ImageBTNSelector').show();
+      $(selector + 'ImageTable').hide();
+    }
+  }
+}
+
+})(window.we);

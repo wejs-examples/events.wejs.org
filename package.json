@@ -14,14 +14,14 @@
     "prepublish": "npm prune"
   },
   "dependencies": {
-    "async": "^0.9.0",
+    "async": "^1.2.1",
     "lodash": "^3.3.1",
-    "we-core": "^0.3.40",
+    "we-core": "^0.3.44",
     "we-plugin-conference": "wejs/we-plugin-conference",
-    "we-plugin-file": "^0.3.1",
-    "we-plugin-form": "^0.3.6",
-    "we-plugin-location": "^0.3.0",
-    "we-plugin-vocabulary": "^0.3.2",
+    "we-plugin-file": "^0.3.3",
+    "we-plugin-form": "^0.3.9",
+    "we-plugin-location": "^0.3.2",
+    "we-plugin-vocabulary": "^0.3.5",
     "we-theme-admin-default": "0.3.5",
     "we-theme-conference": "wejs/we-theme-conference",
     "we-theme-site-wejs": "^0.3.14"

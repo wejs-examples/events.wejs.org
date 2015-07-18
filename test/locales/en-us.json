@@ -33,5 +33,20 @@
 	"home": "home",
 	"conference.find": "conference.find",
 	"Profile": "Profile",
-	"Logout": "Logout"
+	"Logout": "Logout",
+	"form-helper-conference-title": "form-helper-conference-title",
+	"form-helper-conference-abbreviation": "form-helper-conference-abbreviation",
+	"form-helper-conference-about": "form-helper-conference-about",
+	"form-helper-conference-email": "form-helper-conference-email",
+	"form-helper-conference-registrationManagerName": "form-helper-conference-registrationManagerName",
+	"form-helper-conference-registrationManagerEmail": "form-helper-conference-registrationManagerEmail",
+	"form-conference-vacancies": "form-conference-vacancies",
+	"form-placeholder-conference-vacancies": "form-placeholder-conference-vacancies",
+	"form-helper-conference-vacancies": "form-helper-conference-vacancies",
+	"form-helper-conference-location": "form-helper-conference-location",
+	"form-helper-conference-status": "form-helper-conference-status",
+	"form-conference-tags": "form-conference-tags",
+	"form-helper-conference-tags": "form-helper-conference-tags",
+	"form-conference-categories": "form-conference-categories",
+	"form-helper-conference-categories": "form-helper-conference-categories"
 }

@@ -99,5 +99,7 @@
 	"form-cfnews-tags": "form-cfnews-tags",
 	"form-helper-cfnews-tags": "form-helper-cfnews-tags",
 	"form-cfnews-categories": "form-cfnews-categories",
-	"form-helper-cfnews-categories": "form-helper-cfnews-categories"
+	"form-helper-cfnews-categories": "form-helper-cfnews-categories",
+	"Masculine": "Masculine",
+	"Feminine": "Feminine"
 }
