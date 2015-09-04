@@ -14,28 +14,29 @@
     "prepublish": "npm prune"
   },
   "dependencies": {
-    "async": "^1.2.1",
-    "lodash": "^3.3.1",
-    "we-core": "^0.3.47",
-    "we-plugin-conference": "wejs/we-plugin-conference",
-    "we-plugin-file": "^0.3.3",
-    "we-plugin-form": "^0.3.9",
-    "we-plugin-location": "^0.3.2",
-    "we-plugin-vocabulary": "^0.3.5",
-    "we-theme-admin-default": "0.3.5",
+    "async": "^1.4.2",
+    "lodash": "^3.10.1",
+    "we-core": "0.3.69",
+    "we-plugin-conference": "0.3.26",
+    "we-plugin-file": "0.3.11",
+    "we-plugin-form": "0.3.16",
+    "we-plugin-location": "0.3.2",
+    "we-plugin-menu": "0.3.2",
+    "we-plugin-vocabulary": "0.3.7",
+    "we-theme-admin-default": "0.3.9",
     "we-theme-conference": "wejs/we-theme-conference",
-    "we-theme-site-wejs": "^0.3.14"
+    "we-theme-site-wejs": "0.3.15"
   },
   "devDependencies": {
     "gulp": "^3.9.0",
     "gulp-concat": "^2.6.0",
-    "gulp-minify-css": "^1.2.0",
+    "gulp-minify-css": "^1.2.1",
     "gulp-rename": "^1.2.2",
     "gulp-sourcemaps": "^1.5.2",
-    "gulp-uglify": "^1.2.0",
-    "mocha": "^2.2.5",
-    "sinon": "^1.14.1",
-    "supertest": "^1.0.1",
-    "we-test-tools": "^0.3.5"
+    "gulp-uglify": "^1.4.0",
+    "mocha": "^2.3.0",
+    "sinon": "^1.16.1",
+    "supertest": "^1.1.0",
+    "we-test-tools": "0.3.8"
   }
 }
