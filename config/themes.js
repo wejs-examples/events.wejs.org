@@ -1,6 +1,6 @@
 module.exports.themes = {
   enabled: [
-    'we-theme-conference',
+    'we-theme-event',
     'we-theme-site-wejs',
     'we-theme-admin-default',
   ],
