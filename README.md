@@ -5,7 +5,6 @@
 **Build With:**
 
 - We.js
-- Polymer
 - Mysql
 
 #How to install
@@ -16,9 +15,9 @@ git clone https://github.com/wejs/site.git
 cd site
 ```
 
-Install **npm** and **bower** dependencies
+Install **npm** dependencies
 ```sh
-npm run deps
+npm install
 
 ```
 #Commands
@@ -27,14 +26,14 @@ npm run deps
 ```sh
 npm run dev
 ```
-#####Build production app client:
+#####Build production assets:
 ```sh
 npm run build
 ```
 
 #####Run project in production environment:
 ```sh
-npm run dev
+npm run prod
 ```
 
 
