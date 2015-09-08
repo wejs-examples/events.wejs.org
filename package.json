@@ -1,5 +1,5 @@
 {
-  "name": "we-project-conference",
+  "name": "we-project-event",
   "version": "0.3.1",
   "private": true,
   "main": "./app.js",
@@ -16,15 +16,15 @@
   "dependencies": {
     "async": "^1.4.2",
     "lodash": "^3.10.1",
-    "we-core": "0.3.69",
-    "we-plugin-conference": "0.3.26",
+    "we-core": "0.3.70",
+    "we-plugin-event": "0.3.27",
     "we-plugin-file": "0.3.11",
-    "we-plugin-form": "0.3.16",
+    "we-plugin-form": "0.3.17",
     "we-plugin-location": "0.3.2",
     "we-plugin-menu": "0.3.2",
-    "we-plugin-vocabulary": "0.3.7",
+    "we-plugin-vocabulary": "0.3.8",
     "we-theme-admin-default": "0.3.9",
-    "we-theme-conference": "wejs/we-theme-conference",
+    "we-theme-event": "wejs/we-theme-event",
     "we-theme-site-wejs": "0.3.15"
   },
   "devDependencies": {
