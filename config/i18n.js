@@ -8,6 +8,6 @@
 module.exports.i18n = {
 
   // Which locales are supported?
-  locales: ['en-us', 'pt-br'],
-  defaultLocale: 'pt-br'
+  locales: ['en-us'],
+  defaultLocale: 'en-us'
 };

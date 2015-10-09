@@ -1,7 +1,0 @@
-[
-  "public/project/client/appAdmin/emberApp.js",
-  "public/plugin/we-plugin-contact/client/shared/models/ContactModel.js",
-  "public/plugin/we-plugin-contact/client/shared/components/WeContactComponent.js",
-  "public/plugin/we-plugin-messenger/client/shared/components/WeChatBoxComponent.js",
-  "public/project/client/appAdmin/afterEmberFilesLoaded.js"
-]

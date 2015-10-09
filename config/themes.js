@@ -1,9 +1,9 @@
 module.exports.themes = {
   enabled: [
     'we-theme-event',
-    'we-theme-site-wejs',
+    'we-theme-pratt',
     'we-theme-admin-default',
   ],
-  app: 'we-theme-site-wejs',
+  app: 'we-theme-pratt',
   admin: 'we-theme-admin-default'
 };
