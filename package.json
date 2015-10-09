@@ -1,6 +1,6 @@
 {
   "name": "we-project-event",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "main": "./app.js",
   "scripts": {
