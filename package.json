@@ -14,11 +14,11 @@
     "prepublish": "npm prune"
   },
   "dependencies": {
-    "async": "^1.4.2",
-    "lodash": "^3.10.1",
-    "we-core": "0.3.90",
+    "async": "1.4.2",
+    "lodash": "3.10.1",
+    "we-core": "0.3.91",
     "we-plugin-bootstrap3": "0.3.1",
-    "we-plugin-event": "0.3.53",
+    "we-plugin-event": "0.3.54",
     "we-plugin-file": "0.3.14",
     "we-plugin-form": "0.3.20",
     "we-plugin-location": "0.3.3",
