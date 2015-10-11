@@ -510,7 +510,7 @@
   "form-register-acceptTerms": "You accept your terms of use?",
   "form-register-city": "City",
   "form-register-confirmEmail": "Repeat the password",
-  "form-register-confirmPassword": "Repeat the password",
+  "form-register-confirmPassword": "Repeat the email",
   "form-register-country": "Country",
   "form-register-email": "Email",
   "form-register-fullName": "Full name",
