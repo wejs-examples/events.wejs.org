@@ -1,6 +1,6 @@
 {
   "name": "we-project-event",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "main": "./app.js",
   "scripts": {
@@ -27,7 +27,7 @@
     "we-plugin-passport-google": "^0.3.0",
     "we-plugin-vocabulary": "0.3.11",
     "we-theme-admin-default": "0.3.10",
-    "we-theme-event": "0.3.3",
+    "we-theme-event": "0.3.4",
     "we-theme-pratt": "0.3.1",
     "we-theme-site-wejs": "0.3.28"
   },
