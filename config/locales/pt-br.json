@@ -19,6 +19,7 @@
   "auth.forgot-password.reset-password": "auth.forgot-password.reset-password",
   "auth.login.user.incorrect.password.or.email": "auth.login.user.incorrect.password.or.email",
   "auth.new-password": "Nova senha",
+  "auth.oauth.error": "Erro ao tentar se autenticar com a conta do google",
   "auth.register.require.email.activation": "A sua conta de usuário foi criada mas você deve validar o seu email clicando no link de enviamos para a conta de email informada no registro",
   "auth.reset-password.success.can": "auth.reset-password.success.can",
   "cfcertification.generate.all": "Gerar todos os certificados",
@@ -725,6 +726,8 @@
   "vocabulary.edit": "Editar vocabulário",
   "vocabulary.find": "Vocabulários",
   "we.email.AccontActivationEmail.subject": "Validar email de usuário",
+  "widget-html-label": "Texto ou HTML customizado",
+  "widget-passport-strategies-label": "Opções de autenticação",
   "widget.add": "Adicionar widget",
   "widget.delete.confirm.msg": "Vocẽ tem certeza que deseja deletar esse widget?",
   "widget.in-context": "No contexto atual",
@@ -732,5 +735,14 @@
   "widget.in-portal": "Em todas as páginas",
   "widget.in-session": "Nessa sessão",
   "widget.in-session-record": "Nos conteúdos dessa sessão",
-  "widget.visibility": "Exibir o widget: "
+  "widget.visibility": "Exibir o widget: ",
+  "widget.we-cf-location-map.label": "Mapa com a localização do evento",
+  "widget.we-cf-menu-admin.label": "Menu de administração do evento",
+  "widget.we-cf-menu-content.label": "Menu de conteúdos do evento",
+  "widget.we-cf-news.label": "Bloco de notícias do evento",
+  "widget.we-cf-partners.label": "Bloco de parceiros e apoio do evento",
+  "widget.we-cf-schedule.label": "Bloco com a programação do evento",
+  "widget.we-cf-speakers.label": "Bloco com os palestrantes do evento",
+  "widget.we-cf-topics.label": "Bloco com os temas do evento",
+  "widget.we-cf-video.label": "Bloco com os vídeos do evento"
 }

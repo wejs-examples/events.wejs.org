@@ -21,6 +21,7 @@
   "auth.forgot-password.reset-password": "Reset password",
   "auth.login.user.incorrect.password.or.email": "Your email or password is wrong",
   "auth.new-password": "New password",
+  "auth.oauth.error": "Error in google authentication",
   "auth.register.require.email.activation": "We send an account validation email to the email account you entered with how to validate your account",
   "auth.reset-password.success.can": "Your password is updated",
   "cf.registration.name": "name",
@@ -577,6 +578,8 @@
   "vocabulary.edit": "Edit vocabulary",
   "vocabulary.find": "Vocabularies",
   "we.email.AccontActivationEmail.subject": "User account validation email",
+  "widget-html-label": "HTML or text widget",
+  "widget-passport-strategies-label": "Authentication options",
   "widget.add": "Add widget",
   "widget.delete.confirm.msg": "Are you sure you want to delete this widget?",
   "widget.in-page": "In current page",
@@ -584,5 +587,14 @@
   "widget.in-session": "In this session",
   "widget.in-session-record": "In contents of this session",
   "widget.sort": "Sort widgets",
-  "widget.visibility": "Show the widget: "
+  "widget.visibility": "Show the widget: ",
+  "widget.we-cf-location-map.label": "Event location map",
+  "widget.we-cf-menu-admin.label": "Event administration menu",
+  "widget.we-cf-menu-content.label": "Event content admin menu",
+  "widget.we-cf-news.label": "Event news block",
+  "widget.we-cf-partners.label": "Event partners block",
+  "widget.we-cf-schedule.label": "Event schendule block",
+  "widget.we-cf-speakers.label": "Event speakers block",
+  "widget.we-cf-topics.label": "Event topics block",
+  "widget.we-cf-video.label": "Event videos block"
 }
