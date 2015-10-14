@@ -18,7 +18,7 @@
     "lodash": "3.10.1",
     "we-core": "0.3.94",
     "we-plugin-bootstrap3": "0.3.2",
-    "we-plugin-event": "0.3.55",
+    "we-plugin-event": "0.3.56",
     "we-plugin-file": "0.3.14",
     "we-plugin-form": "0.3.20",
     "we-plugin-google-analytics": "0.3.3",
@@ -27,7 +27,7 @@
     "we-plugin-passport-google": "^0.3.0",
     "we-plugin-vocabulary": "0.3.11",
     "we-theme-admin-default": "0.3.10",
-    "we-theme-event": "0.3.6",
+    "we-theme-event": "0.3.7",
     "we-theme-pratt": "0.3.1",
     "we-theme-site-wejs": "0.3.28"
   },
