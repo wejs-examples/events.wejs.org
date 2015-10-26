@@ -16,7 +16,7 @@
   "dependencies": {
     "async": "1.4.2",
     "lodash": "3.10.1",
-    "we-core": "0.3.94",
+    "we-core": "0.3.95",
     "we-plugin-bootstrap3": "0.3.2",
     "we-plugin-event": "0.3.56",
     "we-plugin-file": "0.3.14",
@@ -29,7 +29,7 @@
     "we-theme-admin-default": "0.3.10",
     "we-theme-event": "0.3.7",
     "we-theme-pratt": "0.3.1",
-    "we-theme-site-wejs": "0.3.28"
+    "we-theme-site-wejs": "0.3.30"
   },
   "devDependencies": {
     "gulp": "^3.9.0",
@@ -39,7 +39,7 @@
     "gulp-sourcemaps": "^1.6.0",
     "gulp-uglify": "^1.4.1",
     "mocha": "^2.3.3",
-    "sinon": "^1.17.1",
+    "sinon": "^1.17.2",
     "supertest": "^1.1.0",
     "we-test-tools": "0.3.9"
   }
