@@ -16,7 +16,7 @@
   "dependencies": {
     "async": "^1.5.0",
     "lodash": "3.10.1",
-    "we-core": "^0.3.106",
+    "we-core": "^0.3.110",
     "we-plugin-bootstrap3": "0.3.2",
     "we-plugin-event": "0.3.56",
     "we-plugin-file": "^0.3.20",
@@ -26,7 +26,7 @@
     "we-plugin-menu": "^0.3.10",
     "we-plugin-passport-google": "^0.3.0",
     "we-plugin-vocabulary": "^0.3.20",
-    "we-theme-admin-default": "0.3.10",
+    "we-theme-admin-default": "0.3.11",
     "we-theme-event": "0.3.7",
     "we-theme-pratt": "0.3.2",
     "we-theme-site-wejs": "0.3.30"

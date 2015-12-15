@@ -1,6 +1,5 @@
 {
   "Delete": "Delete",
-  "ER_TRUNCATED_WRONG_VALUE: Incorrect datetime value: 'Invalid date' for column 'callForPapersStartDate' at row 1": "ER_TRUNCATED_WRONG_VALUE: Incorrect datetime value: 'Invalid date' for column 'callForPapersStartDate' at row 1",
   "Edit": "Edit",
   "Home": "Home",
   "Login": "Login",
@@ -562,7 +561,7 @@
   "image.upload.selector.btn": "Select to upload",
   "image.uploader.title": "Upload",
   "layout.edit.btn": "Edit layout",
-  "layout.edit.hide.btn": "Save layout",
+  "layout.edit.hide.btn": "Done",
   "layout.select.widget.type": "Select widget type",
   "link.create": "Criar link",
   "login.block.form.new.account.link": "Register",
