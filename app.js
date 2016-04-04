@@ -1,7 +1,6 @@
-var we = require('we-core');
+var We = require('we-core');
+var we = new We();
 
-we.go(function(err, we) {
+we.go(function (err) {
   if (err) return console.error(err);
-
 });
-

@@ -16,12 +16,23 @@ widget {
   background-color: lightblue;
 }
 
-.we-layout-edit-btn {
+.system-actions {
   display: block;
   position: fixed;
   bottom: 0px;
   margin-left: 2px;
+  z-index: 5;
 }
+.system-actions > div {
+  display: inline;
+}
+/*
+.we-admin-btn {
+  display: block;
+  position: fixed;
+  bottom: 0px;
+  margin-left: 2px;
+}*/
 
 body.we-editing-layout .we-region-actions,
 body.we-editing-layout .we-region-widget-actions {
@@ -58,6 +69,44 @@ a.tabledrag-handle .handle {
 
 .li-submenu.active ul {
   display: block;
+}
+
+#skippy {
+  padding: 5px;
+  color: #000;
+  background-color: #fff;
+  /*outline: 0;*/
+  font-weight: bold;
+  border: 1px solid #000;
+  margin: 2px 3px;
+}
+
+.sr-only-focusable {
+  position: absolute;
+  top: -1000px;
+  left: -1000px;
+  height: 1px;
+  width: 1px;
+  text-align: left;
+  overflow: hidden;
+}
+
+.sr-only-focusable:active,
+.sr-only-focusable:focus,
+.sr-only-focusable:hover {
+  left: 0;
+  top: 0;
+  width: auto;
+  height: auto;
+  overflow: visible;
+}
+
+.tab-content {
+  background-color: #fff;
+  border: 1px solid #ddd;
+  border-top: 0px;
+  padding: 15px;
+  margin-bottom: 10px;
 }
 /*! jQuery UI - v1.11.4 - 2015-06-16
 * http://jqueryui.com
@@ -15810,6 +15859,23 @@ button.note-editor .close {
   .files canvas {
     max-width: 100%;
   }
+}
+
+.event-teaser {
+  margin: 5px 0px 15px 0px;
+  background-color: #fff;
+  padding: 10px;
+  border: 1px solid #ccc;
+}
+.event-teaser > h3 {
+  margin-top: 0px;
+}
+.cf-closed_after {
+  background-color: #ddd;
+}
+
+.event-teaser .img-responsive{
+  margin: 0px 0px 10px 0px
 }
 
 /*

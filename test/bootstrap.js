@@ -1,7 +1,6 @@
 var projectPath = process.cwd();
 var testTools = require('we-test-tools');
 var path = require('path');
-var async = require('async');
 var we;
 
 before(function(callback) {

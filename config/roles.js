@@ -22,8 +22,6 @@ module.exports = {
 			'find_cfmenu',
 			'find_cfpage',
 			'find_cfnews',
-			'find_cfregistration',
-			'find_cfregistrationtype',
 			'find_cfroom',
 			'find_cfsession',
 			'find_cfpartner',
@@ -31,7 +29,8 @@ module.exports = {
 			'find_cfcontact',
 			'find_menu',
 			'find_link',
-			'find_urlAlias'
+			'find_urlAlias',
+			'find_user'
 		],
 		'isSystemRole': true
 	},
@@ -51,8 +50,6 @@ module.exports = {
 			'find_cfmenu',
 			'find_cfpage',
 			'find_cfnews',
-			'find_cfregistration',
-			'find_cfregistrationtype',
 			'find_cfroom',
 			'find_cfsession',
 			'find_cfpartner',
@@ -75,7 +72,8 @@ module.exports = {
 			'crop_image',
 			'delete_image',
 			'delete_file',
-			'update_term'
+			'update_term',
+			'find_cfregistration'
 		],
 		'isSystemRole': true
 	},
@@ -126,7 +124,10 @@ module.exports = {
 			'delete_cfvideo',
 			'create_cfcontact',
 			'update_cfcontact',
-			'delete_cfcontact'
+			'delete_cfcontact',
+			'create_context_widget',
+			'find_cfregistrationtype',
+			'find_cfregistration'
 		]
 	}
 }
