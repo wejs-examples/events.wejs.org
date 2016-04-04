@@ -51114,12 +51114,16 @@ we.structure = {
     var widgetTag = $('#widget-'+id);
     modalForm.modal('show');
 
-    var url = '/api/v1/widget/';
-    if (we.config.structure.widgetEditFormUrl)
-      url = we.config.structure.widgetEditFormUrl
-    url += id+'/form';
+    var url = location.pathname;
 
-    $.get(url).then(function (f) {
+    $.ajax({
+      headers: { 'we-widget-action': 'getUpdateForm' },
+      url: url,
+      method: 'POST',
+      data: {
+        widget: JSON.stringify({ id: id })
+      }
+    }).then(function (f) {
       modalForm.find('.modal-body').html(f);
 
       modalForm.find('form').submit(function( event ) {
@@ -51134,7 +51138,7 @@ we.structure = {
 
         $.ajax({
           headers: { 'we-widget-action': 'update' },
-          url: location.pathname+'?responseType=json',
+          url: url+'?responseType=json',
           method: 'POST',
           data: {
             widget: JSON.stringify(formData)
