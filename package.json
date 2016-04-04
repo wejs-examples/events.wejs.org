@@ -27,7 +27,7 @@
     "we-plugin-passport-google": "^0.3.0",
     "we-plugin-vocabulary": "^0.3.23",
     "we-theme-admin-default": "1.0.1",
-    "we-theme-event": "0.3.8",
+    "we-theme-event": "0.3.9",
     "we-theme-pratt": "1.0.2",
     "we-theme-site-wejs": "0.3.31"
   },
