@@ -14,6 +14,7 @@ module.exports = {
 			'upload_image',
 			'find_file',
 			'upload_file',
+			'create_event',
 			'find_user_image',
 			'find_term',
 			'find_vocabulary',
