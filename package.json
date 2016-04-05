@@ -18,6 +18,7 @@
     "mysql": "^2.10.2",
     "we-core": "^1.1.7",
     "we-plugin-bootstrap3": "0.3.2",
+    "we-plugin-csv": "^1.0.0",
     "we-plugin-event": "0.3.60",
     "we-plugin-file": "^1.0.6",
     "we-plugin-form": "^0.3.29",
