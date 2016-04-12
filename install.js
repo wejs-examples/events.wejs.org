@@ -1,4 +1,4 @@
-var async, _;
+var async, _, user;
 
 module.exports = {
   /**
@@ -31,7 +31,7 @@ module.exports = {
         we.db.models.user.findOrCreate({
           where: { id :1 }, defaults: user1
         }).then(function (r) {
-          var user = r[0];
+          user = r[0];
           we.log.info('New User with id: ', user.id);
 
           we.db.models.password.create({
