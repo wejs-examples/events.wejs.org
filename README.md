@@ -1,46 +1,48 @@
-#We.js site
+# We.js events/conference portal project
 
-> This project load and show wejs/we documentation from github link: http://wejs.org
+> Full featured events portal run in: http://events.wejs.org
 
 **Build With:**
 
 - We.js
 - Mysql
 
-#How to install
+# How to install
 
 Clone the project
+
 ```sh
-git clone https://github.com/wejs/site.git
+git clone https://github.com/wejs-examples/events.wejs.org.git
 cd site
 ```
 
 Install **npm** dependencies
+
 ```sh
 npm install
-
 ```
-#Commands
+# Commands
 
-#####Run project in development environment:
+##### Run project in development environment:
 ```sh
 npm run dev
 ```
-#####Build production assets:
+
+##### Build production assets:
 ```sh
 npm run build
 ```
 
-#####Run project in production environment:
+##### Run project in production environment:
 ```sh
 npm run prod
 ```
 
 
-# Test
+## Test
 
 TODO
 
-#Copyright and license
+## License
 
-Copyright 2013-2015 Alberto Souza <alberto.souza.dev@gmail.com> and contributors, under the MIT license.
+under the MIT license.
