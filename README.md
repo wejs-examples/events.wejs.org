@@ -9,6 +9,8 @@
 
 # How to install
 
+First install all dependencies listed in: https://wejs.org/docs/we/getstarted.installation
+
 Clone the project
 
 ```sh
