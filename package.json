@@ -1,6 +1,6 @@
 {
   "name": "we-project-event",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "private": true,
   "main": "./app.js",
   "scripts": {
@@ -15,11 +15,11 @@
   "dependencies": {
     "express-mysql-session": "^1.0.0",
     "mysql": "^2.10.2",
-    "we-core": "^1.2.6",
+    "we-core": "^1.2.7",
     "we-plugin-bootstrap3": "0.3.2",
     "we-plugin-csv": "^1.0.0",
     "we-plugin-editor-summernote": "^1.0.1",
-    "we-plugin-event": "0.3.63",
+    "we-plugin-event": "0.3.64",
     "we-plugin-file": "^1.0.6",
     "we-plugin-form": "^0.3.34",
     "we-plugin-google-analytics": "0.3.3",
@@ -28,8 +28,8 @@
     "we-plugin-passport-google": "^0.3.0",
     "we-plugin-vocabulary": "^0.3.23",
     "we-theme-admin-default": "1.0.1",
-    "we-theme-event": "0.3.10",
-    "we-theme-pratt": "1.0.3",
+    "we-theme-event": "0.3.12",
+    "we-theme-pratt": "1.0.4",
     "we-theme-site-wejs": "0.3.31"
   },
   "devDependencies": {
