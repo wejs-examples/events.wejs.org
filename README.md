@@ -9,11 +9,13 @@
 
 # How to install
 
+First install all dependencies listed in: https://wejs.org/docs/we/getstarted.installation
+
 Clone the project
 
 ```sh
 git clone https://github.com/wejs-examples/events.wejs.org.git
-cd site
+cd events.wejs.org
 ```
 
 Install **npm** dependencies
@@ -28,7 +30,7 @@ npm install
 npm run dev
 ```
 
-##### Build production assets:
+##### Build production assets and templates:
 ```sh
 npm run build
 ```
