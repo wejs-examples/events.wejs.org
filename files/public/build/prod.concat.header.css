@@ -124,6 +124,10 @@ body.we-editing-layout .widget-hidden {
 .breadcrumb li.active a {
   color: #777;
 }
+
+.strategy-link-local {
+  display: none;
+}
 /*! jQuery UI - v1.11.4 - 2015-06-16
 * http://jqueryui.com
 * Includes: core.css, draggable.css, resizable.css, selectable.css, sortable.css, autocomplete.css, button.css, datepicker.css, menu.css, progressbar.css, selectmenu.css, slider.css, spinner.css
