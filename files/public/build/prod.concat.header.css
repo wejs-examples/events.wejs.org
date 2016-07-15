@@ -1,21 +1,3 @@
-we-region,
-widget {
-  display: block;
-}
-.we-region-actions {
-  display: none;
-  padding: 4px;
-  background-color: gold;
-  border: 2px outset salmon;
-}
-
-
-.we-region-widget-actions {
-  display: none;
-  padding: 4px;
-  background-color: lightblue;
-}
-
 .system-actions {
   display: block;
   position: fixed;
@@ -33,22 +15,6 @@ widget {
   bottom: 0px;
   margin-left: 2px;
 }*/
-
-body.we-editing-layout .we-region-actions,
-body.we-editing-layout .we-region-widget-actions {
-  display: block;
-}
-
-
-body.we-editing-layout .widget {
-  border: 2px dashed transparent;
-  display: block;
-}
-
-body.we-editing-layout .widget:hover{
-  border-color: chocolate;
-}
-
 .modal-body .container {
   display: block;
   width: auto;
@@ -112,15 +78,6 @@ a.tabledrag-handle .handle {
 #ui-datepicker-div {
   z-index: 1001;
 }
-
-.widget-hidden {
-  display: none;
-}
-
-body.we-editing-layout .widget-hidden {
-  display: block;
-}
-
 .breadcrumb li.active a {
   color: #777;
 }
@@ -840,7 +797,7 @@ a.tabledrag-handle:hover {
   text-decoration: none;
 }
 a.tabledrag-handle .handle {
-  background: url(/public/plugin/we-core/files/vendor/jquery.tabledrag/images/draggable.png) no-repeat 6px 9px;
+  background: url(/public/plugin/we-plugin-view/files/vendor/jquery.tabledrag/images/draggable.png) no-repeat 6px 9px;
   height: 13px;
   margin: -0.4em 0.5em; /* LTR */
   padding: 0.42em 0.5em; /* LTR */
@@ -857,13 +814,13 @@ div.indentation {
   width: 20px;
 }
 div.tree-child {
-  background: url(/public/plugin/we-core/files/vendor/jquery.tabledrag/images/tree.png) no-repeat 11px center; /* LTR */
+  background: url(/public/plugin/we-plugin-view/files/vendor/jquery.tabledrag/images/tree.png) no-repeat 11px center; /* LTR */
 }
 div.tree-child-last {
-  background: url(/public/plugin/we-core/files/vendor/jquery.tabledrag/images/tree-bottom.png) no-repeat 11px center; /* LTR */
+  background: url(/public/plugin/we-plugin-view/files/vendor/jquery.tabledrag/images/tree-bottom.png) no-repeat 11px center; /* LTR */
 }
 div.tree-child-horizontal {
-  background: url(/public/plugin/we-core/files/vendor/jquery.tabledrag/images/tree.png) no-repeat -11px center;
+  background: url(/public/plugin/we-plugin-view/files/vendor/jquery.tabledrag/images/tree.png) no-repeat -11px center;
 }
 .tabledrag-toggle-weight-wrapper {
   text-align: right; /* LTR */
@@ -1171,8 +1128,8 @@ span.css-emoticon.nintendo-controller {
  * -------------------------- */
 @font-face {
   font-family: 'FontAwesome';
-  src: url('/public/plugin/we-core/files/vendor/font-awesome/fonts/fontawesome-webfont.eot?v=4.3.0');
-  src: url('/public/plugin/we-core/files/vendor/font-awesome/fonts/fontawesome-webfont.eot?#iefix&v=4.3.0') format('embedded-opentype'), url('/public/plugin/we-core/files/vendor/font-awesome/fonts/fontawesome-webfont.woff2?v=4.3.0') format('woff2'), url('/public/plugin/we-core/files/vendor/font-awesome/fonts/fontawesome-webfont.woff?v=4.3.0') format('woff'), url('/public/plugin/we-core/files/vendor/font-awesome/fonts/fontawesome-webfont.ttf?v=4.3.0') format('truetype'), url('/public/plugin/we-core/files/vendor/font-awesome/fonts/fontawesome-webfont.svg?v=4.3.0#fontawesomeregular') format('svg');
+  src: url('/public/plugin/we-plugin-view/files/vendor/font-awesome/fonts/fontawesome-webfont.eot?v=4.3.0');
+  src: url('/public/plugin/we-plugin-view/files/vendor/font-awesome/fonts/fontawesome-webfont.eot?#iefix&v=4.3.0') format('embedded-opentype'), url('/public/plugin/we-plugin-view/files/vendor/font-awesome/fonts/fontawesome-webfont.woff2?v=4.3.0') format('woff2'), url('/public/plugin/we-plugin-view/files/vendor/font-awesome/fonts/fontawesome-webfont.woff?v=4.3.0') format('woff'), url('/public/plugin/we-plugin-view/files/vendor/font-awesome/fonts/fontawesome-webfont.ttf?v=4.3.0') format('truetype'), url('/public/plugin/we-plugin-view/files/vendor/font-awesome/fonts/fontawesome-webfont.svg?v=4.3.0#fontawesomeregular') format('svg');
   font-weight: normal;
   font-style: normal;
 }
@@ -14954,7 +14911,7 @@ button.note-editor .close {
 }
 .ui-widget-content {
 	border: 1px solid #dddddd;
-	background: #eeeeee url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-bg_highlight-soft_100_eeeeee_1x100.png") 50% top repeat-x;
+	background: #eeeeee url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-bg_highlight-soft_100_eeeeee_1x100.png") 50% top repeat-x;
 	color: #333333;
 }
 .ui-widget-content a {
@@ -14962,7 +14919,7 @@ button.note-editor .close {
 }
 .ui-widget-header {
 	border: 1px solid #e78f08;
-	background: #f6a828 url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-bg_gloss-wave_35_f6a828_500x100.png") 50% 50% repeat-x;
+	background: #f6a828 url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-bg_gloss-wave_35_f6a828_500x100.png") 50% 50% repeat-x;
 	color: #ffffff;
 	font-weight: bold;
 }
@@ -14976,7 +14933,7 @@ button.note-editor .close {
 .ui-widget-content .ui-state-default,
 .ui-widget-header .ui-state-default {
 	border: 1px solid #cccccc;
-	background: #f6f6f6 url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-bg_glass_100_f6f6f6_1x400.png") 50% 50% repeat-x;
+	background: #f6f6f6 url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-bg_glass_100_f6f6f6_1x400.png") 50% 50% repeat-x;
 	font-weight: bold;
 	color: #1c94c4;
 }
@@ -14993,7 +14950,7 @@ button.note-editor .close {
 .ui-widget-content .ui-state-focus,
 .ui-widget-header .ui-state-focus {
 	border: 1px solid #fbcb09;
-	background: #fdf5ce url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-bg_glass_100_fdf5ce_1x400.png") 50% 50% repeat-x;
+	background: #fdf5ce url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-bg_glass_100_fdf5ce_1x400.png") 50% 50% repeat-x;
 	font-weight: bold;
 	color: #c77405;
 }
@@ -15012,7 +14969,7 @@ button.note-editor .close {
 .ui-widget-content .ui-state-active,
 .ui-widget-header .ui-state-active {
 	border: 1px solid #fbd850;
-	background: #ffffff url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-bg_glass_65_ffffff_1x400.png") 50% 50% repeat-x;
+	background: #ffffff url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-bg_glass_65_ffffff_1x400.png") 50% 50% repeat-x;
 	font-weight: bold;
 	color: #eb8f00;
 }
@@ -15029,7 +14986,7 @@ button.note-editor .close {
 .ui-widget-content .ui-state-highlight,
 .ui-widget-header .ui-state-highlight {
 	border: 1px solid #fed22f;
-	background: #ffe45c url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-bg_highlight-soft_75_ffe45c_1x100.png") 50% top repeat-x;
+	background: #ffe45c url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-bg_highlight-soft_75_ffe45c_1x100.png") 50% top repeat-x;
 	color: #363636;
 }
 .ui-state-highlight a,
@@ -15041,7 +14998,7 @@ button.note-editor .close {
 .ui-widget-content .ui-state-error,
 .ui-widget-header .ui-state-error {
 	border: 1px solid #cd0a0a;
-	background: #b81900 url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-bg_diagonals-thick_18_b81900_40x40.png") 50% 50% repeat;
+	background: #b81900 url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-bg_diagonals-thick_18_b81900_40x40.png") 50% 50% repeat;
 	color: #ffffff;
 }
 .ui-state-error a,
@@ -15087,27 +15044,27 @@ button.note-editor .close {
 }
 .ui-icon,
 .ui-widget-content .ui-icon {
-	background-image: url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-icons_222222_256x240.png");
+	background-image: url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-icons_222222_256x240.png");
 }
 .ui-widget-header .ui-icon {
-	background-image: url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-icons_ffffff_256x240.png");
+	background-image: url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-icons_ffffff_256x240.png");
 }
 .ui-state-default .ui-icon {
-	background-image: url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-icons_ef8c08_256x240.png");
+	background-image: url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-icons_ef8c08_256x240.png");
 }
 .ui-state-hover .ui-icon,
 .ui-state-focus .ui-icon {
-	background-image: url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-icons_ef8c08_256x240.png");
+	background-image: url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-icons_ef8c08_256x240.png");
 }
 .ui-state-active .ui-icon {
-	background-image: url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-icons_ef8c08_256x240.png");
+	background-image: url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-icons_ef8c08_256x240.png");
 }
 .ui-state-highlight .ui-icon {
-	background-image: url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-icons_228ef1_256x240.png");
+	background-image: url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-icons_228ef1_256x240.png");
 }
 .ui-state-error .ui-icon,
 .ui-state-error-text .ui-icon {
-	background-image: url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-icons_ffd27a_256x240.png");
+	background-image: url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-icons_ffd27a_256x240.png");
 }
 
 /* positioning */
@@ -15320,14 +15277,14 @@ button.note-editor .close {
 
 /* Overlays */
 .ui-widget-overlay {
-	background: #666666 url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-bg_diagonals-thick_20_666666_40x40.png") 50% 50% repeat;
+	background: #666666 url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-bg_diagonals-thick_20_666666_40x40.png") 50% 50% repeat;
 	opacity: .5;
 	filter: Alpha(Opacity=50); /* support: IE8 */
 }
 .ui-widget-shadow {
 	margin: -5px 0 0 -5px;
 	padding: 5px;
-	background: #000000 url("/public/plugin/we-core/files/vendor/jquery-ui/images/ui-bg_flat_10_000000_40x100.png") 50% 50% repeat-x;
+	background: #000000 url("/public/plugin/we-plugin-view/files/vendor/jquery-ui/images/ui-bg_flat_10_000000_40x100.png") 50% 50% repeat-x;
 	opacity: .2;
 	filter: Alpha(Opacity=20); /* support: IE8 */
 	border-radius: 5px;
@@ -15948,6 +15905,43 @@ button.note-editor .close {
           transition-property: height, visibility;
 }
 
+we-region,
+widget {
+  display: block;
+}
+
+.we-region-actions {
+  display: none;
+  padding: 4px;
+  background-color: gold;
+  border: 2px outset salmon;
+}
+
+.we-region-widget-actions {
+  display: none;
+  padding: 4px;
+  background-color: lightblue;
+}
+
+body.we-editing-layout .we-region-actions,
+body.we-editing-layout .we-region-widget-actions {
+  display: block;
+}
+body.we-editing-layout .widget {
+  border: 2px dashed transparent;
+  display: block;
+}
+
+body.we-editing-layout .widget:hover{
+  border-color: chocolate;
+}
+
+.widget-hidden {
+  display: none;
+}
+body.we-editing-layout .widget-hidden {
+  display: block;
+}
 /*! fancyBox v2.1.5 fancyapps.com | fancyapps.com/fancybox/#license */
 .fancybox-wrap,
 .fancybox-skin,
