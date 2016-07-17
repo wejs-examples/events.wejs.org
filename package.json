@@ -15,7 +15,7 @@
   "dependencies": {
     "express-mysql-session": "^1.1.1",
     "mysql": "^2.11.1",
-    "we-core": "^1.8.6",
+    "we-core": "^1.8.7",
     "we-plugin-acl": "^1.2.6",
     "we-plugin-auth": "^1.1.4",
     "we-plugin-bootstrap3": "1.0.0",
