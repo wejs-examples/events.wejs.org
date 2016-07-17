@@ -22,7 +22,7 @@
     "we-plugin-csv": "^1.1.0",
     "we-plugin-editor-summernote": "^1.1.0",
     "we-plugin-event": "1.0.0",
-    "we-plugin-file": "^1.3.5",
+    "we-plugin-file": "^1.3.6",
     "we-plugin-file-local": "^1.1.2",
     "we-plugin-form": "^1.1.1",
     "we-plugin-google-analytics": "1.1.0",
@@ -30,14 +30,16 @@
     "we-plugin-menu": "^1.3.2",
     "we-plugin-passport-facebook": "^1.1.0",
     "we-plugin-passport-google": "^1.0.0",
-    "we-plugin-user": "^1.1.0",
+    "we-plugin-user": "^1.1.1",
     "we-plugin-view": "^1.1.2",
     "we-plugin-vocabulary": "^1.1.1",
     "we-theme-admin-default": "1.0.1",
     "we-theme-event": "0.3.12",
     "we-theme-pratt": "1.0.6",
     "we-theme-site-wejs": "0.3.31",
-    "we-plugin-widget": "^1.1.1"
+    "we-plugin-widget": "^1.1.1",
+    "we-plugin-contact": "^1.1.0",
+    "we-plugin-socketio": "^1.0.0"
   },
   "wejs": {
     "plugins": {
@@ -58,7 +60,9 @@
       "we-plugin-acl": true,
       "we-plugin-view": true,
       "we-plugin-user": true,
-      "we-plugin-widget": true
+      "we-plugin-widget": true,
+      "we-plugin-contact": true,
+      "we-plugin-socketio": true
     },
     "devPlugins": {}
   },
