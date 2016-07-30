@@ -41,6 +41,27 @@ npm run prod
 ```
 
 
+## How to configure
+
+Project configuration is set in config/ folder and every file will be parsed and merged in we.config
+
+Example:
+
+For set i18n configuration you can add one file in project config/ folder with:
+
+```js
+module.exports.i18n = {
+  // Which locales are supported?
+  locales: ['en-us'],
+  defaultLocale: 'en-us'
+};
+```
+Example: https://github.com/wejs/site/blob/master/config/i18n.js
+
+And will be parsed to we.config.i18n
+
+config/local.js files are loaded after all files and can override other configs
+
 ## Test
 
 TODO
