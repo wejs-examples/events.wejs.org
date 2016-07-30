@@ -5,7 +5,6 @@
 **Build With:**
 
 - We.js
-- Mysql
 
 # How to install
 
@@ -33,7 +32,7 @@ we install
 
 ##### Run project in development environment:
 ```sh
-npm run dev
+we run
 ```
 
 ##### Build production assets and templates:
@@ -43,7 +42,7 @@ npm run build
 
 ##### Run project in production environment:
 ```sh
-npm run prod
+we run --prod
 ```
 
 ## Changing locale
