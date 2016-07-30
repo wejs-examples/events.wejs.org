@@ -18,10 +18,16 @@ git clone https://github.com/wejs-examples/events.wejs.org.git
 cd events.wejs.org
 ```
 
+Configure the database:
+
+Copy config/local.example to config/local.js and configure your database.
+
+If you use postgresql you need to install postgresql database, see https://wejs.org/docs/we/database
+
 Install **npm** dependencies
 
 ```sh
-npm install
+we install
 ```
 # Commands
 
@@ -39,7 +45,6 @@ npm run build
 ```sh
 npm run prod
 ```
-
 
 ## How to configure
 
@@ -64,7 +69,7 @@ config/local.js files are loaded after all files and can override other configs
 
 ## Test
 
-TODO
+TODO, Looking for contributors!
 
 ## License
 
