@@ -40,6 +40,9 @@ npm run build
 npm run prod
 ```
 
+## Changing locale
+
+The change the default locale to English open config/i18n.js and uncomment the lines for en-us and comment out the lines for pt-br.
 
 ## Test
 
