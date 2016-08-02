@@ -74,6 +74,10 @@ config/local.js files are loaded after all files and can override other configs
 
 TODO, Looking for contributors!
 
+## Deployment
+### Heroku 
+* See https://wejs.org/docs/we/heroku
+
 ## License
 
 under the MIT license.
