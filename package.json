@@ -11,7 +11,7 @@
     "start": "node app.js --dev",
     "build": "gulp build",
     "gsd": "node bin/generate-stub-data.js",
-    "deploy": "npm run buil && git push prod master:master && git push prod master:prod"
+    "deploy": "git push prod master:master && git push prod master:prod"
   },
   "dependencies": {
     "express-mysql-session": "^1.2.0",
