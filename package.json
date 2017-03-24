@@ -40,7 +40,8 @@
     "we-theme-site-wejs": "0.3.31",
     "we-plugin-widget": "^1.1.1",
     "we-plugin-contact": "^1.1.0",
-    "we-plugin-socketio": "^1.0.0"
+    "we-plugin-socketio": "^1.0.0",
+    "we-plugin-email": "^1.1.2"
   },
   "wejs": {
     "plugins": {
@@ -63,7 +64,8 @@
       "we-plugin-user": true,
       "we-plugin-widget": true,
       "we-plugin-contact": true,
-      "we-plugin-socketio": true
+      "we-plugin-socketio": true,
+      "we-plugin-email": true
     },
     "devPlugins": {}
   },
